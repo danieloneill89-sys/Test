@@ -1,165 +1,253 @@
 """
-agent.py — the geo-history agent (v0)
+agent.py — geo-history agent (v1: tool use)
 
-End to end:
-  1. Take an English townland name (and optional county to disambiguate).
-  2. Ask Logainm for the Irish name, etymology, county, and coordinate.
-  3. Use that coordinate to ask the monuments database for nearby sites.
-  4. Hand both results to Claude and ask for a short historical synthesis.
-  5. Print it.
+Claude now drives the pipeline. Rather than always running Logainm → monuments
+→ synthesize in a fixed order, Claude reads the etymology from Logainm and
+decides what to look for on the ground — which monument types to search for,
+at what radius, and whether to try again if the first search turns up nothing.
 
-This v0 is a fixed pipeline (Logainm -> coordinate -> monuments -> synthesis).
-It is the scaffold the "agentic" version grows from: later, the etymology from
-step 2 can decide what step 3 actually looks for.
-
-Install: pip install requests anthropic
-Set two environment variables before running:
-    export LOGAINM_API_KEY="your-logainm-key"
-    export ANTHROPIC_API_KEY="your-anthropic-key"
-
-Example:
-    python3 agent.py Ballinakill --county Laois
+Tools available to the model:
+  lookup_townland  — Logainm placenames API (name, etymology, coordinate)
+  find_monuments   — National Monuments Service SMR (archaeological sites)
 """
 
+import json
 import argparse
 
 from anthropic import Anthropic
 
-from logainm_lookup import lookup_townland
+from logainm_lookup import lookup_townland as _lookup_townland
 from monuments_lookup import find_monuments_near
 
-# The model that writes the synthesis.
 SYNTHESIS_MODEL = "claude-sonnet-4-6"
 
+TOOLS = [
+    {
+        "name": "lookup_townland",
+        "description": (
+            "Look up an Irish townland by English name in the Logainm placenames database. "
+            "Returns the Irish name, etymology (word-by-word meanings of the Irish components), "
+            "county, feature type, and coordinate. "
+            "Always call this first — the etymology tells you what was historically at this place "
+            "and should guide everything you search for next."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "English townland name, e.g. 'Ballinakill'."
+                },
+                "county": {
+                    "type": "string",
+                    "description": "County to disambiguate, e.g. 'Laois'. Only needed if the name appears in multiple counties."
+                }
+            },
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "find_monuments",
+        "description": (
+            "Search the National Monuments Service Archaeological Survey of Ireland for recorded "
+            "monuments near a coordinate. Use the etymology from lookup_townland to guide the search: "
+            "words like 'ráth', 'lios', 'dún' suggest ringforts or enclosures; 'cill', 'teampall' "
+            "suggest ecclesiastical sites; 'tobar' suggests holy wells; 'caisleán' suggests a castle. "
+            "If nothing is found at the default radius, try a wider search before concluding there are "
+            "no recorded monuments."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "latitude": {
+                    "type": "number",
+                    "description": "Latitude (WGS84), from the lookup_townland result."
+                },
+                "longitude": {
+                    "type": "number",
+                    "description": "Longitude (WGS84), from the lookup_townland result."
+                },
+                "radius_km": {
+                    "type": "number",
+                    "description": (
+                        "Search radius in kilometres. Defaults to 2.0. "
+                        "Use smaller (0.5–1.0) for a tight local search; "
+                        "use larger (3.0–5.0) if the etymology suggests a significant feature "
+                        "that may sit just outside the townland boundary."
+                    )
+                },
+                "monument_type": {
+                    "type": "string",
+                    "description": (
+                        "Optional filter for a specific monument class, e.g. 'Ringfort', 'Church', "
+                        "'Holy Well', 'Castle'. Use this when the etymology strongly suggests one type."
+                    )
+                }
+            },
+            "required": ["latitude", "longitude"]
+        }
+    }
+]
 
-def choose_place(matches):
-    """Pick the single place to describe from Logainm's list of matches.
+SYSTEM_PROMPT = """You are a knowledgeable Irish local historian building a geo-history note about a townland.
 
-    The caller has already filtered by county if they gave one. From whatever
-    remains we prefer the actual townland (the project's unit of interest) over
-    the town or electoral division that may share the name and coordinate.
-    """
-    townlands = [m for m in matches if m["feature_type"] == "townland"]
-    if townlands:
-        return townlands[0]
-    return matches[0]  # fall back to whatever we have
+Follow these steps:
+1. Call lookup_townland to get the Irish name and its etymology.
+2. Read the etymology carefully — it is your primary clue about what was historically present:
+   - Words like ráth, lios, dún → look for ringforts or earthworks
+   - Words like cill, teampall, domhnach → look for early Christian / ecclesiastical sites
+   - Words like tobar → look for holy wells
+   - Words like coill, doire → woodland context, search broadly for any monuments
+   - Words like baile, achadh → settlement, search broadly
+3. Call find_monuments guided by what the etymology suggests. Adjust the radius and monument_type accordingly. If nothing is found, try a wider radius before concluding there are no recorded monuments.
+4. Once you have the evidence, write 2–3 short paragraphs connecting the name's meaning to what is physically recorded. Use ONLY facts from the tool results — do not invent dates, events, or details.
+
+Output ONLY the historical note itself. Do not add any conversational preamble (no "Here is the note:", no "Excellent — a rich haul!"), and do not add a sign-off afterwards. When you cite a monument, include its SMR number in parentheses so the claim can be traced back to the record."""
 
 
-def build_prompt(place, monuments):
-    """Assemble the human-readable brief we send to Claude.
+def _execute_tool(name, inputs, collected):
+    """Run one tool call and accumulate results into `collected`."""
+    if name == "lookup_townland":
+        results = _lookup_townland(inputs["name"], county=inputs.get("county"))
+        if not results:
+            return {"status": "not_found"}
 
-    We give the model the *facts* (name, etymology, monuments) and ask it to do
-    the one thing it's good at here: weave them into readable prose. We do NOT
-    ask it to recall facts about the place from memory — everything it should
-    rely on is in the brief, which keeps the output grounded in real records.
-    """
-    # Turn the etymology list into a simple readable block.
-    if place["etymology"]:
-        etymology_lines = "\n".join(
-            f"  - {e['word']}: {e['meaning']}" for e in place["etymology"]
+        counties = sorted({m["county"] for m in results if m["county"]})
+        if len(counties) > 1 and not inputs.get("county"):
+            return {
+                "status": "ambiguous",
+                "counties": counties,
+                "message": (
+                    f"'{inputs['name']}' appears in {len(counties)} counties: "
+                    f"{', '.join(counties)}. Call lookup_townland again with a specific county."
+                ),
+            }
+
+        townlands = [m for m in results if m["feature_type"] == "townland"]
+        place = townlands[0] if townlands else results[0]
+        collected["place"] = place
+        return {"status": "ok", "place": place}
+
+    if name == "find_monuments":
+        monuments = find_monuments_near(
+            inputs["latitude"],
+            inputs["longitude"],
+            radius_km=inputs.get("radius_km", 2.0),
         )
-    else:
-        etymology_lines = "  (no word-by-word etymology recorded)"
+        # Apply optional type filter; fall back to unfiltered if it removes everything.
+        monument_type = inputs.get("monument_type")
+        if monument_type:
+            filtered = [
+                m for m in monuments
+                if monument_type.lower() in (m["monument_class"] or "").lower()
+            ]
+            if filtered:
+                monuments = filtered
 
-    # Turn the monuments into a compact list. We trim each description so a
-    # dozen long archaeological notes don't bloat the prompt.
-    if monuments:
-        monument_lines = []
-        for m in monuments:
-            note = (m["description"] or "").strip().replace("\n", " ")
-            if len(note) > 400:
-                note = note[:400] + "..."
-            monument_lines.append(
-                f"  - {m['monument_class']} ({m['distance_km']} km away): {note}"
-            )
-        monuments_block = "\n".join(monument_lines)
-    else:
-        monuments_block = "  (no recorded monuments found within the search radius)"
+        # Accumulate across multiple calls, deduplicating by SMR number.
+        seen = {m["smr_number"] for m in collected.get("monuments", [])}
+        new_ones = [m for m in monuments if m["smr_number"] not in seen]
+        collected.setdefault("monuments", []).extend(new_ones)
+        return {"count": len(monuments), "monuments": monuments}
 
-    return f"""You are a knowledgeable local historian writing a short note about an Irish townland. Use ONLY the facts provided below — do not add events, dates, or details that are not supported here. If the records are sparse, say so honestly.
-
-PLACE
-  English name: {place['english_name']}
-  Irish name: {place['irish_name']} (genitive: {place['irish_genitive']})
-  County: {place['county']}
-  Type: {place['feature_type']}
-
-WHAT THE IRISH NAME MEANS (etymology)
-{etymology_lines}
-
-RECORDED MONUMENTS NEARBY
-{monuments_block}
-
-Write two or three short paragraphs that connect the meaning of the name to what is physically recorded on the ground. Start from what the Irish name tells us, then bring in the monuments where they fit. Readable and grounded, the kind of note a knowledgeable local might write — not a data dump."""
+    return {"error": f"Unknown tool: {name}"}
 
 
-def synthesize(prompt):
-    """Send the brief to Claude and return the written synthesis.
+def run_agent(townland, county=None, default_radius_km=2.0):
+    """Run the agentic pipeline and return a result dict.
 
-    Anthropic() reads ANTHROPIC_API_KEY from the environment automatically.
+    Returns one of:
+        {"status": "ok",        "place": ..., "monuments": [...], "synthesis": "..."}
+        {"status": "not_found"}
+        {"status": "ambiguous", "counties": [...]}
     """
     client = Anthropic()
-    message = client.messages.create(
-        model=SYNTHESIS_MODEL,
-        max_tokens=1000,
-        messages=[{"role": "user", "content": prompt}],
+    collected = {}  # accumulates place and monuments as tools fire
+
+    user_msg = f"Research the townland '{townland}'"
+    if county:
+        user_msg += f" in Co. {county}"
+    user_msg += (
+        f" and write a short historical note about it. "
+        f"Start with a {default_radius_km} km monument search radius."
     )
-    return message.content[0].text
+
+    messages = [{"role": "user", "content": user_msg}]
+
+    for _ in range(10):  # safety cap — a well-formed run needs 3–4 turns at most
+        response = client.messages.create(
+            model=SYNTHESIS_MODEL,
+            max_tokens=2000,
+            system=SYSTEM_PROMPT,
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason == "end_turn":
+            synthesis = next(
+                (block.text for block in response.content if hasattr(block, "text")), ""
+            )
+            return {
+                "status": "ok",
+                "place": collected.get("place"),
+                "monuments": collected.get("monuments", []),
+                "synthesis": synthesis,
+            }
+
+        # Process tool calls and feed results back into the conversation.
+        tool_results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            result = _execute_tool(block.name, block.input, collected)
+            # Surface not_found / ambiguous immediately rather than letting
+            # Claude try to handle it — the caller (CLI or web) owns that UX.
+            if result.get("status") in ("not_found", "ambiguous"):
+                return result
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": json.dumps(result),
+            })
+
+        if tool_results:
+            messages.append({"role": "user", "content": tool_results})
+
+    return {"status": "error", "message": "Agent did not complete within the turn limit."}
 
 
 def main():
     parser = argparse.ArgumentParser(description="Geo-history agent for Irish townlands.")
     parser.add_argument("townland", nargs="?", default="Ballinakill",
                         help="English townland name (default: Ballinakill)")
-    parser.add_argument("--county", default=None,
-                        help="County to disambiguate, e.g. Laois")
+    parser.add_argument("--county", default=None, help="County to disambiguate, e.g. Laois")
     parser.add_argument("--radius", type=float, default=2.0,
-                        help="Monument search radius in km (default: 2.0)")
+                        help="Starting monument search radius in km (default: 2.0)")
     args = parser.parse_args()
 
-    # --- Step 1 & 2: Logainm -------------------------------------------------
-    matches = lookup_townland(args.townland, county=args.county)
+    result = run_agent(args.townland, county=args.county, default_radius_km=args.radius)
 
-    if not matches:
-        # Could be a genuinely unknown name, or a county filter that excluded
-        # everything. Either way, tell the user plainly.
-        print(f'No Logainm match for "{args.townland}"'
+    if result["status"] == "not_found":
+        print(f'No match found for "{args.townland}"'
               + (f' in Co. {args.county}.' if args.county else '.'))
         return
 
-    # If the name is ambiguous across counties and the user didn't pick one,
-    # don't guess — show the counties and ask them to narrow it down.
-    counties = sorted({m["county"] for m in matches if m["county"]})
-    if len(counties) > 1 and not args.county:
-        print(f'"{args.townland}" matches places in several counties:')
-        for c in counties:
+    if result["status"] == "ambiguous":
+        print(f'"{args.townland}" appears in several counties:')
+        for c in result["counties"]:
             print(f"  - {c}")
-        print('\nRe-run with --county, e.g. '
-              f'python3 agent.py "{args.townland}" --county "{counties[0]}"')
+        print(f'\nRe-run with --county, e.g. '
+              f'python3 agent.py "{args.townland}" --county "{result["counties"][0]}"')
         return
 
-    place = choose_place(matches)
-    print(f"Found: {place['english_name']} ({place['irish_name']}), "
-          f"{place['feature_type']} in Co. {place['county']}\n")
-
-    # --- Step 3: monuments ---------------------------------------------------
-    # A coordinate is required to search for monuments. If Logainm has none,
-    # we carry on with an empty list rather than crashing — the synthesis can
-    # still work from the name alone.
-    if place["latitude"] is None or place["longitude"] is None:
-        print("No coordinate available — skipping the monuments search.\n")
-        monuments = []
-    else:
-        monuments = find_monuments_near(
-            place["latitude"], place["longitude"], radius_km=args.radius
-        )
-        print(f"Found {len(monuments)} recorded monument(s) within "
-              f"{args.radius} km.\n")
-
-    # --- Step 4 & 5: synthesise and print ------------------------------------
-    prompt = build_prompt(place, monuments)
+    p = result["place"]
+    print(f"Found: {p['english_name']} ({p['irish_name']}), "
+          f"{p['feature_type']} in Co. {p['county']}\n")
+    print(f"Found {len(result['monuments'])} monument(s).\n")
     print("-" * 70)
-    print(synthesize(prompt))
+    print(result["synthesis"])
     print("-" * 70)
 
 
