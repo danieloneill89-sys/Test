@@ -138,8 +138,14 @@ def lookup_townland(name, county=None):
         placenames = place.get("placenames", [])
         irish = _placename_for_language(placenames, "ga")
         english = _placename_for_language(placenames, "en")
+        # Logainm's own record ID. We keep it so we can build a permalink back
+        # to the canonical page (https://www.logainm.ie/en/<id>) — that lets the
+        # synthesis cite a verifiable source for the placename and etymology.
+        logainm_id = place.get("id")
         matches.append(
             {
+                "logainm_id": logainm_id,
+                "logainm_url": f"https://www.logainm.ie/en/{logainm_id}" if logainm_id else None,
                 "english_name": english.get("wording") if english else None,
                 "irish_name": irish.get("wording") if irish else None,
                 "irish_genitive": irish.get("genitive") if irish else None,

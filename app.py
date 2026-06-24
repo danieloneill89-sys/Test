@@ -19,51 +19,20 @@ talks to your own local server.
 
 from flask import Flask, render_template, request, jsonify
 
-# Reuse the building blocks we already wrote and tested.
-from logainm_lookup import lookup_townland
-from monuments_lookup import find_monuments_near
-from agent import choose_place, build_prompt, synthesize
+from agent import run_agent
 
 app = Flask(__name__)
 
 
 def run_pipeline(townland, county, radius_km):
-    """Run the full lookup + synthesis and return a plain dict for the page.
+    """Run the agentic pipeline and return a plain dict for the page.
 
     The dict always has a "status" the front end can branch on:
         "ok"        -> includes place, monuments, synthesis
         "not_found" -> nothing matched
         "ambiguous" -> matched several counties; includes the list to choose from
     """
-    matches = lookup_townland(townland, county=county or None)
-
-    if not matches:
-        return {"status": "not_found"}
-
-    # If the name spans several counties and the user didn't pick one, don't
-    # guess — hand the list back so the page can ask them to choose.
-    counties = sorted({m["county"] for m in matches if m["county"]})
-    if len(counties) > 1 and not county:
-        return {"status": "ambiguous", "counties": counties}
-
-    place = choose_place(matches)
-
-    # Monuments need a coordinate; if there isn't one, carry on without them.
-    if place["latitude"] is None or place["longitude"] is None:
-        monuments = []
-    else:
-        monuments = find_monuments_near(
-            place["latitude"], place["longitude"], radius_km=radius_km
-        )
-
-    synthesis = synthesize(build_prompt(place, monuments))
-
-    return {
-        "status": "ok",
-        "place": place,
-        "monuments": monuments,
-        "synthesis": synthesis,
-    }
+    return run_agent(townland, county=county or None, default_radius_km=radius_km)
 
 
 @app.route("/")

@@ -119,6 +119,7 @@
     .mon .type { font-weight: bold; color: var(--green-dark); }
     .mon .dist { color: var(--gold); white-space: nowrap; font-weight: bold; }
     .mon .note { color: #5c513c; font-size: 0.92rem; margin-top: 4px; line-height: 1.5; }
+    .mon .smr { font-size: 0.78rem; font-weight: normal; color: #8a7a55; font-family: monospace; }
 
     .ambiguous button.county-pick {
       width: auto; display: inline-block; margin: 6px 8px 0 0; padding: 8px 16px;
@@ -242,6 +243,7 @@
         <div class="irish">${p.irish_name || ''}${p.irish_genitive ? ' · gen. ' + p.irish_genitive : ''}</div>
         <div class="meta">${p.feature_type || ''} &nbsp;·&nbsp; Co. ${p.county || '—'}
           ${p.latitude ? '&nbsp;·&nbsp; ' + p.latitude.toFixed(4) + ', ' + p.longitude.toFixed(4) : ''}</div>
+        ${p.logainm_url ? '<div class="meta"><a href="' + p.logainm_url + '" target="_blank" rel="noopener">View this placename on Logainm.ie →</a></div>' : ''}
       </div>
       <div class="synthesis">${format(data.synthesis)}</div>
     `;
@@ -256,8 +258,9 @@
     if (data.monuments.length) {
       data.monuments.forEach(m => {
         const note = (m.description || '').replace(/\s+/g, ' ').slice(0, 280);
+        const smr = m.smr_number ? ` <span class="smr">${m.smr_number}</span>` : '';
         html += `<div class="mon">
-          <div class="top"><span class="type">${m.monument_class || 'Unknown'}</span>
+          <div class="top"><span class="type">${m.monument_class || 'Unknown'}${smr}</span>
           <span class="dist">${m.distance_km} km</span></div>
           <div class="note">${note}${note.length >= 280 ? '…' : ''}</div></div>`;
       });
