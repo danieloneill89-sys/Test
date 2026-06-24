@@ -96,5 +96,5 @@ def lookup():
 
 
 if __name__ == "__main__":
-    # debug=True auto-reloads when you edit the code, and shows errors in detail.
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Port 5001 (not 5000) — macOS reserves 5000 for its AirPlay Receiver.
+    app.run(host="127.0.0.1", port=5001, debug=True)
