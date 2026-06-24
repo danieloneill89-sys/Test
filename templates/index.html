@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>An Áit · Irish Geo-History</title>
+  <style>
+    /* ---- Theme: parchment + bog-oak + Irish green/gold ---- */
+    :root {
+      --ink: #2b2417;
+      --parchment: #f4ebd9;
+      --green: #1f6e43;
+      --green-dark: #14502f;
+      --gold: #c79a3b;
+      --line: #d8c8a6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Iowan Old Style", "Palatino", serif;
+      color: var(--ink);
+      /* Subtle layered "old map" background */
+      background:
+        radial-gradient(1200px 600px at 80% -10%, #fbf4e3 0%, transparent 60%),
+        radial-gradient(900px 500px at -10% 110%, #efe2c6 0%, transparent 55%),
+        #f4ebd9;
+      min-height: 100vh;
+    }
+    header {
+      text-align: center;
+      padding: 42px 20px 10px;
+    }
+    header .pin { font-size: 40px; display: block; margin-bottom: 6px; }
+    h1 {
+      margin: 0;
+      font-size: 2.6rem;
+      letter-spacing: 0.5px;
+      color: var(--green-dark);
+    }
+    header p {
+      margin: 8px auto 0;
+      max-width: 540px;
+      color: #6b5d44;
+      font-style: italic;
+    }
+
+    .card {
+      background: rgba(255, 252, 244, 0.85);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 30px rgba(70, 55, 25, 0.10);
+      max-width: 760px;
+      margin: 24px auto;
+      padding: 26px 30px;
+    }
+
+    /* ---- The search controls ---- */
+    .controls { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+    label { display: block; font-size: 0.82rem; text-transform: uppercase;
+            letter-spacing: 1px; color: var(--green-dark); margin-bottom: 6px; }
+    input[type="text"] {
+      width: 100%; padding: 12px 14px; font-size: 1.05rem; font-family: inherit;
+      border: 1px solid var(--line); border-radius: 9px; background: #fffdf8;
+      color: var(--ink);
+    }
+    input[type="text"]:focus { outline: 2px solid var(--gold); border-color: var(--gold); }
+
+    .radius-row { margin-top: 18px; }
+    .radius-row .val { color: var(--green-dark); font-weight: bold; }
+    input[type="range"] { width: 100%; accent-color: var(--green); }
+
+    button {
+      margin-top: 22px; width: 100%; padding: 14px; font-size: 1.1rem;
+      font-family: inherit; cursor: pointer; color: #fff; border: none;
+      border-radius: 10px; letter-spacing: 0.5px;
+      background: linear-gradient(180deg, var(--green) 0%, var(--green-dark) 100%);
+      transition: transform 0.05s ease, filter 0.15s ease;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:active { transform: translateY(1px); }
+    button:disabled { filter: grayscale(0.5) brightness(0.95); cursor: wait; }
+
+    /* ---- Loading / status ---- */
+    #status { text-align: center; margin: 18px auto; color: #6b5d44; font-style: italic; }
+    .dots::after {
+      content: ""; animation: dots 1.4s steps(4, end) infinite;
+    }
+    @keyframes dots { 0% { content: ""; } 25% { content: "."; }
+      50% { content: ".."; } 75% { content: "..."; } 100% { content: ""; } }
+
+    /* ---- Results ---- */
+    #result { display: none; }
+    .place-head {
+      border-bottom: 2px solid var(--gold); padding-bottom: 12px; margin-bottom: 18px;
+    }
+    .place-head h2 { margin: 0; color: var(--green-dark); font-size: 1.8rem; }
+    .place-head .irish { font-style: italic; color: var(--green); font-size: 1.15rem; }
+    .place-head .meta { color: #6b5d44; margin-top: 4px; font-size: 0.95rem; }
+
+    .synthesis { line-height: 1.7; font-size: 1.08rem; }
+    .synthesis h1, .synthesis h2 { color: var(--green-dark); font-size: 1.3rem; }
+    .synthesis em { color: var(--green-dark); }
+
+    /* ---- The evidence drawer ---- */
+    details.evidence {
+      margin-top: 26px; border-top: 1px dashed var(--line); padding-top: 14px;
+    }
+    details.evidence summary {
+      cursor: pointer; color: var(--green-dark); font-size: 0.85rem;
+      text-transform: uppercase; letter-spacing: 1px; user-select: none;
+    }
+    .ety { margin: 14px 0; }
+    .ety span { display: inline-block; background: #efe6cf; border: 1px solid var(--line);
+      border-radius: 20px; padding: 4px 12px; margin: 3px 4px 3px 0; font-size: 0.95rem; }
+    .ety b { color: var(--green-dark); }
+    .mon { padding: 10px 0; border-bottom: 1px solid #ece0c2; }
+    .mon:last-child { border-bottom: none; }
+    .mon .top { display: flex; justify-content: space-between; gap: 12px; }
+    .mon .type { font-weight: bold; color: var(--green-dark); }
+    .mon .dist { color: var(--gold); white-space: nowrap; font-weight: bold; }
+    .mon .note { color: #5c513c; font-size: 0.92rem; margin-top: 4px; line-height: 1.5; }
+
+    .ambiguous button.county-pick {
+      width: auto; display: inline-block; margin: 6px 8px 0 0; padding: 8px 16px;
+      font-size: 0.95rem;
+    }
+    footer { text-align: center; color: #9c8c6c; font-size: 0.8rem; padding: 10px 0 40px; }
+    footer a { color: var(--green); }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="pin">🗺️</span>
+    <h1>An Áit</h1>
+    <p>Type an Irish townland and uncover what its name &amp; the land remember.</p>
+  </header>
+
+  <div class="card">
+    <div class="controls">
+      <div>
+        <label for="townland">Townland</label>
+        <input type="text" id="townland" placeholder="e.g. Ballinakill" value="Ballinakill">
+      </div>
+      <div>
+        <label for="county">County <span style="text-transform:none;letter-spacing:0">(optional)</span></label>
+        <input type="text" id="county" placeholder="e.g. Laois" value="Laois">
+      </div>
+    </div>
+
+    <div class="radius-row">
+      <label for="radius">Search the land within <span class="val" id="radiusVal">2.0</span> km</label>
+      <input type="range" id="radius" min="0.5" max="10" step="0.5" value="2">
+    </div>
+
+    <button id="go" onclick="lookup()">Reveal the history →</button>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="card" id="result"></div>
+
+  <footer>
+    Sources: <a href="https://www.logainm.ie">Logainm.ie</a> &amp;
+    the <a href="https://www.archaeology.ie">Archaeological Survey of Ireland</a>
+    · synthesis by Claude · both datasets CC&nbsp;BY&nbsp;4.0
+  </footer>
+
+<script>
+  // Keep the radius label in step with the slider.
+  const radius = document.getElementById('radius');
+  const radiusVal = document.getElementById('radiusVal');
+  radius.addEventListener('input', () => radiusVal.textContent = (+radius.value).toFixed(1));
+
+  // Tiny, safe markdown -> HTML for the synthesis. We escape first (so nothing
+  // in the data can inject HTML), then turn a few markdown bits into tags.
+  function format(text) {
+    const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return esc
+      .replace(/^#{1,6}\s*(.+)$/gm, '<h2>$1</h2>')          // headings
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')                // bold
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')                  // italics
+      .split(/\n\s*\n/).map(p => p.startsWith('<h2>') ? p : '<p>' + p + '</p>').join('');
+  }
+
+  async function lookup(forceCounty) {
+    const townland = document.getElementById('townland').value;
+    const county = (forceCounty !== undefined) ? forceCounty : document.getElementById('county').value;
+    if (forceCounty !== undefined) document.getElementById('county').value = forceCounty;
+
+    const btn = document.getElementById('go');
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+
+    btn.disabled = true;
+    resultEl.style.display = 'none';
+    statusEl.innerHTML = '<span class="dots">Consulting the records &amp; the land</span>';
+
+    try {
+      const res = await fetch('/lookup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ townland, county, radius: radius.value })
+      });
+      const data = await res.json();
+      render(data);
+    } catch (e) {
+      statusEl.textContent = 'Something went wrong reaching the server.';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function render(data) {
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+    statusEl.textContent = '';
+
+    if (data.status === 'not_found') {
+      statusEl.textContent = 'No place of that name was found. Check the spelling, or try without a county.';
+      return;
+    }
+    if (data.status === 'error') {
+      statusEl.textContent = 'Error: ' + data.message;
+      return;
+    }
+    if (data.status === 'ambiguous') {
+      let html = '<div class="ambiguous"><b>That name appears in several counties.</b> Which one?<br>';
+      data.counties.forEach(c => {
+        html += `<button class="county-pick" onclick="lookup('${c}')">${c}</button>`;
+      });
+      html += '</div>';
+      resultEl.innerHTML = html;
+      resultEl.style.display = 'block';
+      return;
+    }
+
+    // status === 'ok'
+    const p = data.place;
+    let html = `
+      <div class="place-head">
+        <h2>${p.english_name}</h2>
+        <div class="irish">${p.irish_name || ''}${p.irish_genitive ? ' · gen. ' + p.irish_genitive : ''}</div>
+        <div class="meta">${p.feature_type || ''} &nbsp;·&nbsp; Co. ${p.county || '—'}
+          ${p.latitude ? '&nbsp;·&nbsp; ' + p.latitude.toFixed(4) + ', ' + p.longitude.toFixed(4) : ''}</div>
+      </div>
+      <div class="synthesis">${format(data.synthesis)}</div>
+    `;
+
+    // The evidence drawer — closed by default, open it to check the grounding.
+    html += `<details class="evidence"><summary>Show the evidence (${data.monuments.length} monuments)</summary>`;
+    if (p.etymology && p.etymology.length) {
+      html += '<div class="ety">';
+      p.etymology.forEach(e => html += `<span><b>${e.word}</b> — ${e.meaning}</span>`);
+      html += '</div>';
+    }
+    if (data.monuments.length) {
+      data.monuments.forEach(m => {
+        const note = (m.description || '').replace(/\s+/g, ' ').slice(0, 280);
+        html += `<div class="mon">
+          <div class="top"><span class="type">${m.monument_class || 'Unknown'}</span>
+          <span class="dist">${m.distance_km} km</span></div>
+          <div class="note">${note}${note.length >= 280 ? '…' : ''}</div></div>`;
+      });
+    } else {
+      html += '<p style="color:#6b5d44;font-style:italic">No recorded monuments within the radius.</p>';
+    }
+    html += '</details>';
+
+    resultEl.innerHTML = html;
+    resultEl.style.display = 'block';
+  }
+</script>
+</body>
+</html>
