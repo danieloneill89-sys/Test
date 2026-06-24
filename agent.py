@@ -12,6 +12,7 @@ Tools available to the model:
 """
 
 import json
+import re
 import argparse
 
 from anthropic import Anthropic
@@ -100,9 +101,13 @@ Follow these steps:
    - Words like coill, doire → woodland context, search broadly for any monuments
    - Words like baile, achadh → settlement, search broadly
 3. Call find_monuments guided by what the etymology suggests. Adjust the radius and monument_type accordingly. If nothing is found, try a wider radius before concluding there are no recorded monuments.
-4. Once you have the evidence, write 2–3 short paragraphs connecting the name's meaning to what is physically recorded. Use ONLY facts from the tool results — do not invent dates, events, or details.
+4. Write 2–3 short paragraphs connecting the name's meaning to what is physically recorded. Use ONLY facts from the tool results — do not invent dates, events, or details. Be vivid and specific: if the records mention a named individual, an unusual architectural feature, or a striking historical detail, include it. Cite each monument's SMR number in parentheses.
 
-Output ONLY the historical note itself. Do not add any conversational preamble (no "Here is the note:", no "Excellent — a rich haul!"), and do not add a sign-off afterwards. When you cite a monument, include its SMR number in parentheses so the claim can be traced back to the record."""
+OUTPUT FORMAT — follow exactly or the page will break:
+• Begin with the very first word of the historical note. No title. No "Here is the note:". No preamble of any kind.
+• No closing sentence or sign-off after the note ends.
+• After the final paragraph, add one line formatted precisely as:
+  CURIOSITY: [one sentence — the single most surprising or unusual fact the records reveal about this place]"""
 
 
 def _execute_tool(name, inputs, collected):
@@ -189,6 +194,11 @@ def run_agent(townland, county=None, default_radius_km=2.0):
             synthesis = next(
                 (block.text for block in response.content if hasattr(block, "text")), ""
             )
+            # Strip any preamble that leaks through despite the system prompt.
+            synthesis = re.sub(
+                r'^\s*(?:(?:here(?:\'s| is)(?: the)?(?: historical)? note|---)[:\s]*\n?)+',
+                '', synthesis, flags=re.IGNORECASE,
+            ).strip()
             return {
                 "status": "ok",
                 "place": collected.get("place"),
