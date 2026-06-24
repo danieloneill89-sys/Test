@@ -158,6 +158,28 @@ def _execute_tool(name, inputs, collected):
     return {"error": f"Unknown tool: {name}"}
 
 
+def _strip_preamble(text):
+    """Remove any conversational preamble the model adds before the note.
+
+    Despite the system prompt, the model sometimes opens with chatter such as
+    "Excellent — a rich set of 15 monuments returned. Here is the historical
+    note:" optionally followed by a "---" rule. We can't rely on it starting
+    with a fixed phrase, so we look for a preamble that ends in "... note:"
+    (or "follows:") within the first few hundred characters and cut everything
+    up to and including it, then trim any leading horizontal rule.
+    """
+    text = (text or "").strip()
+
+    # Cut everything up to and including an opener that ends in "note:"/"follows:".
+    opener = re.match(r'(?is)^.{0,400}?\b(?:note|follows|below)\s*:\s*', text)
+    if opener:
+        text = text[opener.end():]
+
+    # Strip a leading markdown rule and any blank lines left behind.
+    text = re.sub(r'^\s*(?:-{3,}\s*)+', '', text)
+    return text.strip()
+
+
 def run_agent(townland, county=None, default_radius_km=2.0):
     """Run the agentic pipeline and return a result dict.
 
@@ -194,11 +216,7 @@ def run_agent(townland, county=None, default_radius_km=2.0):
             synthesis = next(
                 (block.text for block in response.content if hasattr(block, "text")), ""
             )
-            # Strip any preamble that leaks through despite the system prompt.
-            synthesis = re.sub(
-                r'^\s*(?:(?:here(?:\'s| is)(?: the)?(?: historical)? note|---)[:\s]*\n?)+',
-                '', synthesis, flags=re.IGNORECASE,
-            ).strip()
+            synthesis = _strip_preamble(synthesis)
             return {
                 "status": "ok",
                 "place": collected.get("place"),
