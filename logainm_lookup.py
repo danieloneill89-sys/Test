@@ -24,7 +24,7 @@ import requests
 # The documented base URL of the Logainm API. It's a module-level constant
 # so there's a single, obvious place to bump the version if the hub moves on
 # (the developer hub currently also references a "v1.0").
-LOGAINM_BASE_URL = "https://www.logainm.ie/api/v0.9/"
+LOGAINM_BASE_URL = "https://www.logainm.ie/api/v1.0/"
 
 
 def _english_name(placenames):
