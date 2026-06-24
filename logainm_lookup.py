@@ -1,61 +1,51 @@
 """
 logainm_lookup.py
 
-A single, simple function for looking up an Irish townland (or other place)
-by its English name using the Logainm API (the State's Placenames Database
-of Ireland, logainm.ie).
+Source 1 of the geo-history agent: the Logainm placenames database.
+
+Given an English townland name, this returns the structured facts we need to
+drive the rest of the pipeline: the Irish form of the name (the primary
+source for what was historically there), any recorded word-meanings
+(etymology), the county, the feature type, and — crucially — a coordinate we
+can hand to the monuments database next.
 
 Access method (confirmed June 2026):
-  - Logainm exposes a JSON HTTP API at https://www.logainm.ie/api/v1.0/
-  - You need a free API key. Register on the Gaois Developer Hub (gaois.ie)
-    or email logainm@dcu.ie to request one. (Docs: docs.gaois.ie, and
-    github.com/gaois/LogainmAPI-docs)
-  - The key is sent in the "X-Api-Key" request header.
-  - Data is licensed CC BY 4.0.
+  - JSON HTTP API at https://www.logainm.ie/api/v1.0/
+  - Free API key, sent in the "X-Api-Key" header (register at gaois.ie).
+  - Data licensed CC BY 4.0.
 
-Install the one dependency:
-    pip install requests
+Install: pip install requests
 """
 
 import os
 import requests
 
-# The base URL of the Logainm API v1.0.
 LOGAINM_BASE_URL = "https://www.logainm.ie/api/v1.0/"
 
 
-def _english_name(placenames):
-    """Pull the English-language wording out of a place's 'placenames' list.
+def _placename_for_language(placenames, language):
+    """Return the full placename record for a given language code ('en'/'ga').
 
-    Each placename has a 'language' code (ISO 639-1, so 'en' / 'ga') and the
-    actual text in 'wording'. We look for the English one; if none is tagged
-    'en' we fall back to whichever name is marked 'main', so we always return
-    something sensible rather than crashing.
+    We return the whole record (not just the text) because the Irish record
+    also carries the genitive form, which is useful context. We prefer the
+    one flagged 'main' (the canonical name) if there are several.
     """
-    for p in placenames:
-        if p.get("language") == "en":
-            return p.get("wording")
-    for p in placenames:
+    candidates = [p for p in placenames if p.get("language") == language]
+    if not candidates:
+        return None
+    # Prefer the canonical name; otherwise just take the first.
+    for p in candidates:
         if p.get("main"):
-            return p.get("wording")
-    return None
-
-
-def _irish_name(placenames):
-    """Pull the Irish-language ('ga') wording out of a place's 'placenames'."""
-    for p in placenames:
-        if p.get("language") == "ga":
-            return p.get("wording")
-    return None
+            return p
+    return candidates[0]
 
 
 def _county(place):
     """Find the county a place sits in.
 
-    Logainm models the administrative hierarchy in the 'includedIn' list:
-    a townland is "included in" a civil parish, a barony, AND a county, etc.
-    Each entry has its own 'category' (the kind of unit it is). We walk that
-    list and return the one whose category is 'county'.
+    Logainm models the administrative hierarchy in 'includedIn': a townland is
+    included in a civil parish, a barony, AND a county. Each entry has its own
+    'category'; we return the one whose category is 'county'.
     """
     for unit in place.get("includedIn", []):
         category = unit.get("category") or {}
@@ -67,8 +57,7 @@ def _county(place):
 def _feature_type(place):
     """Return the place's own feature type, e.g. 'townland' or 'civil parish'.
 
-    A place can belong to several categories; the first is the primary one,
-    which is what we want here.
+    A place can have several categories; the first is the primary one.
     """
     categories = place.get("categories", [])
     if categories:
@@ -76,27 +65,54 @@ def _feature_type(place):
     return None
 
 
-def lookup_townland(name):
+def _coordinate(place):
+    """Return (latitude, longitude) for the place, or (None, None).
+
+    Not every record has a coordinate, so we fail soft: the caller decides
+    what to do when it's missing.
+    """
+    geography = place.get("geography") or {}
+    coords = geography.get("coordinates") or []
+    if coords:
+        first = coords[0]
+        return first.get("latitude"), first.get("longitude")
+    return None, None
+
+
+def _etymology(place):
+    """Return recorded word-meanings as a list of {'word', 'meaning'} dicts.
+
+    Logainm's 'glossary' breaks the name into its constituent Irish words and
+    gives their meaning (e.g. 'baile' -> 'townland, town', 'coill' -> 'wood').
+    This is the etymological core that should, in later versions, steer what
+    the agent goes looking for next.
+    """
+    out = []
+    for g in place.get("glossary", []):
+        out.append({"word": g.get("headword"), "meaning": g.get("translation")})
+    return out
+
+
+def lookup_townland(name, county=None):
     """Look up an English townland name in Logainm.
 
-    Returns a list of matches, where each match is a small dict:
+    Args:
+        name:   English townland name, e.g. "Ballinakill".
+        county: Optional county name to disambiguate (e.g. "Laois"). Place
+                names repeat across Ireland, so this filter is how the caller
+                narrows 7 Ballinakills down to the one they mean.
+
+    Returns a list of matches; each match is a dict:
         {
-            "english_name": str,
-            "irish_name":   str | None,
-            "county":       str | None,
-            "feature_type": str | None,  # e.g. "townland", "civil parish"
+            "english_name", "irish_name", "irish_genitive",
+            "county", "feature_type",
+            "latitude", "longitude",
+            "etymology": [ {"word", "meaning"}, ... ],
         }
 
-    Why a list? Place names in Ireland are not unique — there are several
-    townlands called "Ballinakill" in different counties. Returning a list
-    lets the caller see all of them:
-        - 0 results -> the name wasn't found (empty list)
-        - 1 result  -> a clean single match
-        - many      -> ambiguous; the caller can pick by county, etc.
+    Returning a list (not a single result) is deliberate: 0 = not found,
+    1 = clean match, many = ambiguous and the caller must choose.
     """
-    # The API key is read from an environment variable so we never hard-code
-    # a secret into the source. Set it once in your shell:
-    #     export LOGAINM_API_KEY="your-key-here"
     api_key = os.environ.get("LOGAINM_API_KEY")
     if not api_key:
         raise RuntimeError(
@@ -104,61 +120,54 @@ def lookup_townland(name):
             "Get a free key from the Gaois Developer Hub (gaois.ie)."
         )
 
-    # 'Query' is Logainm's free-text search parameter. Searches are
-    # accent-sensitive and match exact wording, so "Ballinakill" finds
-    # places named exactly that.
+    # 'Query' is Logainm's free-text search. It is accent-sensitive and matches
+    # exact wording, so "Ballinakill" returns places named exactly that.
     response = requests.get(
         LOGAINM_BASE_URL,
         params={"Query": name},
         headers={"X-Api-Key": api_key},
-        timeout=15,  # never hang forever on a slow network
+        timeout=15,
     )
-    # Turn any HTTP error (bad key = 401, etc.) into a clear exception.
     response.raise_for_status()
 
-    # v1.0 returns a object where results live in "results" (not "Places").
-    data = response.json()
-    places = data.get("results", [])
+    # v1.0 puts the records in "results".
+    places = response.json().get("results", [])
 
-    # Flatten each raw place record down to just the four fields we care about.
     matches = []
     for place in places:
         placenames = place.get("placenames", [])
+        irish = _placename_for_language(placenames, "ga")
+        english = _placename_for_language(placenames, "en")
         matches.append(
             {
-                "english_name": _english_name(placenames),
-                "irish_name": _irish_name(placenames),
+                "english_name": english.get("wording") if english else None,
+                "irish_name": irish.get("wording") if irish else None,
+                "irish_genitive": irish.get("genitive") if irish else None,
                 "county": _county(place),
                 "feature_type": _feature_type(place),
+                "latitude": _coordinate(place)[0],
+                "longitude": _coordinate(place)[1],
+                "etymology": _etymology(place),
             }
         )
+
+    # If the caller named a county, keep only matches in that county.
+    # Case-insensitive so "laois" and "Laois" both work.
+    if county:
+        wanted = county.strip().lower()
+        matches = [m for m in matches if (m["county"] or "").lower() == wanted]
+
     return matches
 
 
 if __name__ == "__main__":
-    # --- Example run -------------------------------------------------------
-    # From the command line (after `pip install requests` and setting your key):
-    #
+    # Quick manual test of just this module.
     #     export LOGAINM_API_KEY="your-key-here"
     #     python3 logainm_lookup.py
-    #
-    # This looks up "Ballinakill" and shows all matches, highlighting Laois.
-    search_term = "Ballinakill"
-    matches = lookup_townland(search_term)
-
-    if not matches:
-        print(f'No places found for "{search_term}".')
-    else:
-        print(f'Found {len(matches)} place(s) for "{search_term}":\n')
-        for m in matches:
-            print(
-                f"  {m['english_name']} ({m['irish_name']}) "
-                f"- {m['feature_type']} in Co. {m['county']}"
-            )
-
-        # Pick out the Laois one specifically, to match the example.
-        laois = [m for m in matches if m["county"] == "Laois"]
-        if laois:
-            print("\nIn County Laois:")
-            for m in laois:
-                print(f"  {m['english_name']} = {m['irish_name']} ({m['feature_type']})")
+    for m in lookup_townland("Ballinakill", county="Laois"):
+        print(
+            f"{m['english_name']} ({m['irish_name']}) - {m['feature_type']}, "
+            f"Co. {m['county']} @ {m['latitude']}, {m['longitude']}"
+        )
+        for e in m["etymology"]:
+            print(f"    {e['word']}: {e['meaning']}")
