@@ -1,23 +1,21 @@
 """
-agent.py — geo-history agent (v1: tool use)
-
-Claude now drives the pipeline. Rather than always running Logainm → monuments
-→ synthesize in a fixed order, Claude reads the etymology from Logainm and
-decides what to look for on the ground — which monument types to search for,
-at what radius, and whether to try again if the first search turns up nothing.
+agent.py — geo-history agent (v2: three sources)
 
 Tools available to the model:
-  lookup_townland  — Logainm placenames API (name, etymology, coordinate)
-  find_monuments   — National Monuments Service SMR (archaeological sites)
+  lookup_townland  — Logainm: Irish name, etymology, historical forms, coordinate
+  find_monuments   — NMS SMR: archaeological sites near the coordinate
+  search_wikipedia — Wikipedia: additional context for notable places/landmarks
 """
 
 import json
+import re
 import argparse
 
 from anthropic import Anthropic
 
 from logainm_lookup import lookup_townland as _lookup_townland
 from monuments_lookup import find_monuments_near
+from wikipedia_lookup import search_wikipedia as _search_wikipedia
 
 SYNTHESIS_MODEL = "claude-sonnet-4-6"
 
@@ -86,13 +84,39 @@ TOOLS = [
             },
             "required": ["latitude", "longitude"]
         }
+    },
+    {
+        "name": "search_wikipedia",
+        "description": (
+            "Search Wikipedia for additional context about this townland or its notable features. "
+            "Use this AFTER lookup_townland and find_monuments, and ONLY when the place is likely "
+            "to have meaningful Wikipedia coverage — e.g. the etymology or SMR records mention a "
+            "well-known castle, a famous monastery, a notable landlord estate, or a historically "
+            "significant village. Skip it for obscure townlands with no distinctive features. "
+            "Wikipedia is a secondary source — use it to add narrative colour (population history, "
+            "named individuals, broader context) but ground all specific factual claims in Logainm "
+            "or SMR records."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Search query, e.g. 'Crumlin Dublin history', 'Dunamase Castle Laois', "
+                        "'Ballinakill Laois'. Include the county to reduce ambiguity."
+                    )
+                }
+            },
+            "required": ["query"]
+        }
     }
 ]
 
 SYSTEM_PROMPT = """You are a knowledgeable Irish local historian building a geo-history note about a townland.
 
 Follow these steps:
-1. Call lookup_townland to get the Irish name and its etymology.
+1. Call lookup_townland to get the Irish name, etymology, and any historical forms of the name.
 2. Read the etymology carefully — it is your primary clue about what was historically present:
    - Words like ráth, lios, dún → look for ringforts or earthworks
    - Words like cill, teampall, domhnach → look for early Christian / ecclesiastical sites
@@ -100,9 +124,14 @@ Follow these steps:
    - Words like coill, doire → woodland context, search broadly for any monuments
    - Words like baile, achadh → settlement, search broadly
 3. Call find_monuments guided by what the etymology suggests. Adjust the radius and monument_type accordingly. If nothing is found, try a wider radius before concluding there are no recorded monuments.
-4. Once you have the evidence, write 2–3 short paragraphs connecting the name's meaning to what is physically recorded. Use ONLY facts from the tool results — do not invent dates, events, or details.
+3b. Optionally call search_wikipedia if the etymology or monuments suggest the place has notable Wikipedia coverage — a famous castle, a well-known monastic site, a historically significant village. Skip it for unremarkable townlands.
+4. Write 2–3 short paragraphs synthesising ALL the evidence. Use ONLY facts from the tool results — do not invent dates, events, or details. Be vivid and specific: include named individuals, unusual architectural features, striking historical details. If historical_forms are present in the lookup result, weave in one or two to show how the name evolved across the centuries. Cite each monument's SMR number in parentheses. If Wikipedia was useful, you may mention it naturally but do not cite a URL — the synthesis should read as a continuous narrative.
 
-Output ONLY the historical note itself. Do not add any conversational preamble (no "Here is the note:", no "Excellent — a rich haul!"), and do not add a sign-off afterwards. When you cite a monument, include its SMR number in parentheses so the claim can be traced back to the record."""
+OUTPUT FORMAT — follow exactly or the page will break:
+• Begin with the very first word of the historical note. No title. No "Here is the note:". No preamble of any kind.
+• No closing sentence or sign-off after the note ends.
+• After the final paragraph, add one line formatted precisely as:
+  CURIOSITY: [one sentence — the single most surprising or unusual fact the records reveal about this place]"""
 
 
 def _execute_tool(name, inputs, collected):
@@ -150,7 +179,35 @@ def _execute_tool(name, inputs, collected):
         collected.setdefault("monuments", []).extend(new_ones)
         return {"count": len(monuments), "monuments": monuments}
 
+    if name == "search_wikipedia":
+        result = _search_wikipedia(inputs["query"])
+        if result.get("found"):
+            collected.setdefault("wikipedia", []).append(result)
+        return result
+
     return {"error": f"Unknown tool: {name}"}
+
+
+def _strip_preamble(text):
+    """Remove any conversational preamble the model adds before the note.
+
+    Despite the system prompt, the model sometimes opens with chatter such as
+    "Excellent — a rich set of 15 monuments returned. Here is the historical
+    note:" optionally followed by a "---" rule. We can't rely on it starting
+    with a fixed phrase, so we look for a preamble that ends in "... note:"
+    (or "follows:") within the first few hundred characters and cut everything
+    up to and including it, then trim any leading horizontal rule.
+    """
+    text = (text or "").strip()
+
+    # Cut everything up to and including an opener that ends in "note:"/"follows:".
+    opener = re.match(r'(?is)^.{0,400}?\b(?:note|follows|below)\s*:\s*', text)
+    if opener:
+        text = text[opener.end():]
+
+    # Strip a leading markdown rule and any blank lines left behind.
+    text = re.sub(r'^\s*(?:-{3,}\s*)+', '', text)
+    return text.strip()
 
 
 def run_agent(townland, county=None, default_radius_km=2.0):
@@ -189,10 +246,12 @@ def run_agent(townland, county=None, default_radius_km=2.0):
             synthesis = next(
                 (block.text for block in response.content if hasattr(block, "text")), ""
             )
+            synthesis = _strip_preamble(synthesis)
             return {
                 "status": "ok",
                 "place": collected.get("place"),
                 "monuments": collected.get("monuments", []),
+                "wikipedia": collected.get("wikipedia", []),
                 "synthesis": synthesis,
             }
 
