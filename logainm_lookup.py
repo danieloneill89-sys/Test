@@ -93,6 +93,26 @@ def _etymology(place):
     return out
 
 
+def _historical_forms(place):
+    """Return historical documentary attestations of the placename.
+
+    Logainm records carry dated forms of the name taken from historical
+    sources — showing how the spelling evolved over the centuries. Each entry
+    is {"form", "date", "source"}. The field is "forms" in the v1.0 API;
+    we fail gracefully if it is absent.
+    """
+    out = []
+    for f in place.get("forms", []):
+        entry = {
+            "form":   f.get("wording"),
+            "date":   f.get("date"),
+            "source": f.get("sourceDetails") or f.get("source"),
+        }
+        if entry["form"]:
+            out.append(entry)
+    return out
+
+
 def lookup_townland(name, county=None):
     """Look up an English townland name in Logainm.
 
@@ -154,6 +174,7 @@ def lookup_townland(name, county=None):
                 "latitude": _coordinate(place)[0],
                 "longitude": _coordinate(place)[1],
                 "etymology": _etymology(place),
+                "historical_forms": _historical_forms(place),
             }
         )
 

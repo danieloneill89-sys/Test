@@ -282,6 +282,33 @@
 
     .empty { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); padding: 12px 0; }
 
+    /* Evidence sub-sections */
+    .ev-section-label {
+      font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.24em;
+      text-transform: uppercase; color: var(--muted); margin: 20px 0 10px;
+    }
+    .ev-section-label a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--faint); }
+    .ev-section-label a:hover { color: var(--accent); }
+
+    /* Historical name forms */
+    .hist-forms { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+    .hist-pill {
+      display: inline-flex; align-items: baseline; gap: 7px;
+      font-family: var(--mono); font-size: 0.78rem;
+      border: 1px solid var(--faint); border-radius: 8px; padding: 6px 12px;
+    }
+    .hist-form   { color: var(--ink); font-weight: 500; }
+    .hist-date   { color: var(--accent); font-size: 0.7rem; }
+    .hist-source { color: var(--muted); font-size: 0.68rem; font-style: italic; }
+
+    /* Wikipedia excerpt */
+    .wiki-block { margin-bottom: 8px; }
+    .wiki-text {
+      font-family: var(--serif); font-size: 0.96rem; line-height: 1.65;
+      color: var(--muted); max-width: 700px; padding: 12px 16px;
+      border-left: 2px solid var(--faint); margin-top: 6px;
+    }
+
     /* ---- County picker (ambiguous) ---- */
     .ambiguous p { font-family: var(--mono); font-size: 0.85rem;
       color: var(--ink); letter-spacing: 0.04em; margin: 0 0 18px; }
@@ -398,6 +425,7 @@
     '// reading the name',
     '// searching the land',
     '// consulting the records',
+    '// checking wikipedia',
     '// writing the history',
   ];
   let loadTimer = null;
@@ -587,10 +615,17 @@
     html += `<div class="synthesis">${format(synthText)}</div>`;
 
     // ---- Evidence drawer ----
+    const wiki = (data.wikipedia || []).filter(w => w.found);
+    const hasHistForms = p.historical_forms && p.historical_forms.length;
+    const summaryParts = [`${nMon} monument${nMon === 1 ? '' : 's'}`];
+    if (hasHistForms) summaryParts.push(`${p.historical_forms.length} name form${p.historical_forms.length === 1 ? '' : 's'}`);
+    if (wiki.length)  summaryParts.push('Wikipedia');
+
     html += `
       <details class="evidence stagger">
-        <summary>Evidence · ${nMon} monument${nMon === 1 ? '' : 's'} on record</summary>`;
+        <summary>Evidence · ${summaryParts.join(' · ')}</summary>`;
 
+    // Etymology
     if (p.etymology && p.etymology.length) {
       html += '<div class="ety">';
       p.etymology.forEach(e =>
@@ -598,6 +633,30 @@
       html += '</div>';
     }
 
+    // Historical name forms
+    if (hasHistForms) {
+      html += '<div class="ev-section-label">// name across time</div><div class="hist-forms">';
+      p.historical_forms.forEach(f => {
+        html += `<span class="hist-pill">
+          <span class="hist-form">${f.form}</span>
+          ${f.date ? `<span class="hist-date">${f.date}</span>` : ''}
+          ${f.source ? `<span class="hist-source">${f.source}</span>` : ''}
+        </span>`;
+      });
+      html += '</div>';
+    }
+
+    // Wikipedia excerpt
+    if (wiki.length) {
+      wiki.forEach(w => {
+        html += `<div class="wiki-block">
+          <div class="ev-section-label">// wikipedia · <a href="${w.url}" target="_blank" rel="noopener">${w.title} ↗</a></div>
+          <div class="wiki-text">${w.extract}</div>
+        </div>`;
+      });
+    }
+
+    // Monument cards
     html += '<div class="mon-cards">';
     if (nMon) {
       data.monuments.forEach(m => {

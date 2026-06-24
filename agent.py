@@ -1,14 +1,10 @@
 """
-agent.py — geo-history agent (v1: tool use)
-
-Claude now drives the pipeline. Rather than always running Logainm → monuments
-→ synthesize in a fixed order, Claude reads the etymology from Logainm and
-decides what to look for on the ground — which monument types to search for,
-at what radius, and whether to try again if the first search turns up nothing.
+agent.py — geo-history agent (v2: three sources)
 
 Tools available to the model:
-  lookup_townland  — Logainm placenames API (name, etymology, coordinate)
-  find_monuments   — National Monuments Service SMR (archaeological sites)
+  lookup_townland  — Logainm: Irish name, etymology, historical forms, coordinate
+  find_monuments   — NMS SMR: archaeological sites near the coordinate
+  search_wikipedia — Wikipedia: additional context for notable places/landmarks
 """
 
 import json
@@ -19,6 +15,7 @@ from anthropic import Anthropic
 
 from logainm_lookup import lookup_townland as _lookup_townland
 from monuments_lookup import find_monuments_near
+from wikipedia_lookup import search_wikipedia as _search_wikipedia
 
 SYNTHESIS_MODEL = "claude-sonnet-4-6"
 
@@ -87,13 +84,39 @@ TOOLS = [
             },
             "required": ["latitude", "longitude"]
         }
+    },
+    {
+        "name": "search_wikipedia",
+        "description": (
+            "Search Wikipedia for additional context about this townland or its notable features. "
+            "Use this AFTER lookup_townland and find_monuments, and ONLY when the place is likely "
+            "to have meaningful Wikipedia coverage — e.g. the etymology or SMR records mention a "
+            "well-known castle, a famous monastery, a notable landlord estate, or a historically "
+            "significant village. Skip it for obscure townlands with no distinctive features. "
+            "Wikipedia is a secondary source — use it to add narrative colour (population history, "
+            "named individuals, broader context) but ground all specific factual claims in Logainm "
+            "or SMR records."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Search query, e.g. 'Crumlin Dublin history', 'Dunamase Castle Laois', "
+                        "'Ballinakill Laois'. Include the county to reduce ambiguity."
+                    )
+                }
+            },
+            "required": ["query"]
+        }
     }
 ]
 
 SYSTEM_PROMPT = """You are a knowledgeable Irish local historian building a geo-history note about a townland.
 
 Follow these steps:
-1. Call lookup_townland to get the Irish name and its etymology.
+1. Call lookup_townland to get the Irish name, etymology, and any historical forms of the name.
 2. Read the etymology carefully — it is your primary clue about what was historically present:
    - Words like ráth, lios, dún → look for ringforts or earthworks
    - Words like cill, teampall, domhnach → look for early Christian / ecclesiastical sites
@@ -101,7 +124,8 @@ Follow these steps:
    - Words like coill, doire → woodland context, search broadly for any monuments
    - Words like baile, achadh → settlement, search broadly
 3. Call find_monuments guided by what the etymology suggests. Adjust the radius and monument_type accordingly. If nothing is found, try a wider radius before concluding there are no recorded monuments.
-4. Write 2–3 short paragraphs connecting the name's meaning to what is physically recorded. Use ONLY facts from the tool results — do not invent dates, events, or details. Be vivid and specific: if the records mention a named individual, an unusual architectural feature, or a striking historical detail, include it. Cite each monument's SMR number in parentheses.
+3b. Optionally call search_wikipedia if the etymology or monuments suggest the place has notable Wikipedia coverage — a famous castle, a well-known monastic site, a historically significant village. Skip it for unremarkable townlands.
+4. Write 2–3 short paragraphs synthesising ALL the evidence. Use ONLY facts from the tool results — do not invent dates, events, or details. Be vivid and specific: include named individuals, unusual architectural features, striking historical details. If historical_forms are present in the lookup result, weave in one or two to show how the name evolved across the centuries. Cite each monument's SMR number in parentheses. If Wikipedia was useful, you may mention it naturally but do not cite a URL — the synthesis should read as a continuous narrative.
 
 OUTPUT FORMAT — follow exactly or the page will break:
 • Begin with the very first word of the historical note. No title. No "Here is the note:". No preamble of any kind.
@@ -154,6 +178,12 @@ def _execute_tool(name, inputs, collected):
         new_ones = [m for m in monuments if m["smr_number"] not in seen]
         collected.setdefault("monuments", []).extend(new_ones)
         return {"count": len(monuments), "monuments": monuments}
+
+    if name == "search_wikipedia":
+        result = _search_wikipedia(inputs["query"])
+        if result.get("found"):
+            collected.setdefault("wikipedia", []).append(result)
+        return result
 
     return {"error": f"Unknown tool: {name}"}
 
@@ -221,6 +251,7 @@ def run_agent(townland, county=None, default_radius_km=2.0):
                 "status": "ok",
                 "place": collected.get("place"),
                 "monuments": collected.get("monuments", []),
+                "wikipedia": collected.get("wikipedia", []),
                 "synthesis": synthesis,
             }
 
