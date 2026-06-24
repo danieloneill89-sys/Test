@@ -19,6 +19,14 @@ import requests
 _SEARCH_URL  = "https://en.wikipedia.org/w/api.php"
 _SUMMARY_URL = "https://en.wikipedia.org/api/rest_v1/page/summary/{}"
 
+# Wikipedia's API policy requires a descriptive User-Agent; without it the
+# request may be blocked with 403.
+_HEADERS = {
+    "User-Agent": "AnAit/1.0 (Irish townland geo-history agent; "
+                  "https://github.com/danieloneill89-sys/Test) python-requests",
+    "Accept": "application/json",
+}
+
 
 def search_wikipedia(query, max_chars=700):
     """Search Wikipedia and return a summary for the best matching article.
@@ -30,21 +38,29 @@ def search_wikipedia(query, max_chars=700):
     Returns one of:
         {"found": True,  "title": str, "extract": str, "url": str}
         {"found": False, "query": query}
+
+    Never raises — network or HTTP failures return {"found": False} so a
+    Wikipedia outage doesn't break the main pipeline.
     """
-    # Step 1 — find candidate articles.
-    search_resp = requests.get(
-        _SEARCH_URL,
-        params={
-            "action":      "query",
-            "list":        "search",
-            "srsearch":    query,
-            "format":      "json",
-            "srlimit":     5,
-            "srnamespace": 0,   # main namespace only
-        },
-        timeout=12,
-    )
-    search_resp.raise_for_status()
+    try:
+        # Step 1 — find candidate articles.
+        search_resp = requests.get(
+            _SEARCH_URL,
+            params={
+                "action":      "query",
+                "list":        "search",
+                "srsearch":    query,
+                "format":      "json",
+                "srlimit":     5,
+                "srnamespace": 0,
+            },
+            headers=_HEADERS,
+            timeout=12,
+        )
+        search_resp.raise_for_status()
+    except requests.RequestException:
+        return {"found": False, "query": query}
+
     hits = search_resp.json().get("query", {}).get("search", [])
     if not hits:
         return {"found": False, "query": query}
@@ -52,11 +68,15 @@ def search_wikipedia(query, max_chars=700):
     # Step 2 — fetch the full summary for the top hit.
     title   = hits[0]["title"]
     encoded = requests.utils.quote(title.replace(" ", "_"), safe="")
-    sum_resp = requests.get(
-        _SUMMARY_URL.format(encoded),
-        headers={"Accept": "application/json"},
-        timeout=12,
-    )
+    try:
+        sum_resp = requests.get(
+            _SUMMARY_URL.format(encoded),
+            headers=_HEADERS,
+            timeout=12,
+        )
+    except requests.RequestException:
+        return {"found": False, "query": query}
+
     if sum_resp.status_code != 200:
         return {"found": False, "query": query}
 
