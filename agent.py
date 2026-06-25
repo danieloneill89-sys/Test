@@ -126,14 +126,10 @@ TOOLS = [
     {
         "name": "find_monuments",
         "description": (
-            "Search the National Monuments Service Archaeological Survey of Ireland for recorded "
-            "monuments. Use the etymology from lookup_townland to guide the search: "
-            "words like 'ráth', 'lios', 'dún' suggest ringforts or enclosures; 'cill', 'teampall' "
-            "suggest ecclesiastical sites; 'tobar' suggests holy wells; 'caisleán' suggests a castle. "
-            "BY DEFAULT (omit radius_km) the search is constrained to the townland's actual boundary, "
-            "so you get exactly what is recorded inside this townland. If that finds little or nothing, "
-            "call again WITH a radius_km to widen the search into the surrounding area before "
-            "concluding there are no recorded monuments."
+            "Search the National Monuments Service Archaeological Survey of Ireland (SMR) for "
+            "recorded archaeological monuments near a coordinate, steered by the etymology from "
+            "lookup_townland. See radius_km for how the boundary-first / widen-if-thin search "
+            "works, and monument_type to filter by a specific class."
         ),
         "input_schema": {
             "type": "object",
@@ -244,11 +240,11 @@ You are a knowledgeable Irish local historian. Your job is to write a vivid, spe
    • caisleán → castle
    • muileann → mill
 
-3. Call find_monuments guided by the etymology. First call: no radius (searches the actual townland boundary). Read each monument's description field — it contains specific detail beyond just the class name. If the boundary search returns little or nothing, call again with radius_km 3.0–5.0 to widen. Think about pattern: one ringfort is typical; five ringforts signals a densely farmed early medieval landscape — that is worth noting explicitly.
+3. Call find_monuments, steered by the etymology — search the boundary first and widen only if little is recorded (the tool's parameters explain how). Read each monument's description field; it carries specific detail beyond the class name. Watch for pattern: one ringfort is ordinary, but five signals a densely farmed early medieval landscape worth noting explicitly.
 
-3b. Optionally call search_wikipedia if the place is likely to have real coverage — a famous castle, a known monastic site, a historically significant village. If you call it, look specifically for: population figures, famine-era decline, named individuals, significant events. Skip for unremarkable townlands.
+3b. Optionally call search_wikipedia (the tool description explains when it is worth calling). If you do, mine it for population figures, famine-era decline, named individuals, and significant events.
 
-3c. Call find_built_heritage always. For each building note the name, original_use, date_text (a date like "c.1847" or "1780" often carries historical meaning — famine-era, pre-rebellion, plantation period), and rating. This bridges the gap between pre-1700 archaeology and the modern landscape.
+3c. Always call find_built_heritage. For each building note the name, original_use, rating, and especially date_text — a date like "c.1847" or "1780" often carries meaning (famine-era, pre-rebellion, plantation period).
 
 4. Write the note — 2–3 short paragraphs synthesising all the evidence:
    • Historical forms: if a date is recorded (e.g. "Ballinachill, 1302"), write "first recorded in 1302 as..." — the century matters
