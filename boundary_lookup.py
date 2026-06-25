@@ -39,13 +39,27 @@ import requests
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
-# Overpass: find every area containing the point, narrow to boundary relations
-# that carry a name, and return their tags + full geometry. {lat}/{lon} are
-# filled in per request.
+# Overpass (like Wikipedia) rejects requests without a descriptive User-Agent,
+# answering 406 Not Acceptable. Identify ourselves.
+_HEADERS = {
+    "User-Agent": "AnAit/1.0 (Irish townland geo-history agent; "
+                  "https://github.com/danieloneill89-sys/Test) python-requests",
+    "Accept": "*/*",
+}
+
+# Find the boundaries containing the point, then keep only the townland. In the
+# OSM Ireland scheme a townland is boundary=administrative at admin_level 10
+# (the hierarchy runs 6=county, 8=municipal district, 9=electoral division,
+# 10=townland); a few legacy imports use boundary=townland. We fetch ONLY that
+# level's geometry — fetching every containing boundary would pull the entire
+# outline of Ireland. {lat}/{lon} are filled in per request.
 _OVERPASS_QUERY = """
 [out:json][timeout:25];
 is_in({lat},{lon})->.here;
-relation(pivot.here)[boundary][name];
+(
+  relation(pivot.here)["boundary"="administrative"]["admin_level"="10"];
+  relation(pivot.here)["boundary"="townland"];
+);
 out tags geom;
 """
 
@@ -156,14 +170,16 @@ def find_boundary(latitude, longitude, county=None):
     """
     query = _OVERPASS_QUERY.format(lat=latitude, lon=longitude)
     try:
-        response = requests.post(OVERPASS_URL, data={"data": query}, timeout=30)
+        response = requests.post(
+            OVERPASS_URL, data={"data": query}, headers=_HEADERS, timeout=30
+        )
         response.raise_for_status()
         elements = response.json().get("elements", [])
     except (requests.RequestException, ValueError):
         return None
 
-    # Each element is a boundary the point sits inside. Compute a bbox for each
-    # and keep the smallest — that's the townland, regardless of its tags.
+    # The query already narrows to townland level; if more than one comes back
+    # (rare overlaps) compute a bbox for each and keep the smallest.
     candidates = []
     for el in elements:
         members = el.get("members") or []
