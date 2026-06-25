@@ -46,6 +46,16 @@ model's memory.
 - **Source citations** — Logainm permalink + SMR numbers + Wikipedia URL so
   every claim can be traced back to a record.
 - **Sticky county bug fixed** — form fields have no hardcoded defaults.
+- **Lean pass** *(on branch `claude/logainm-townland-lookup-wzxq6o`, in testing —
+  not yet merged)* — the agent loop now runs on Haiku 4.5 (~3× cheaper, faster),
+  and tool results are trimmed before they're resent to the model (nearest 8
+  monuments / 6 buildings, clipped descriptions, capped historical forms — ~60%
+  off the monuments+buildings payload), while the full records are kept in
+  `collected` so the UI evidence drawer is unchanged. Keys now load from a
+  git-ignored `.env`. Prompt caching was evaluated and skipped: the system+tools
+  prefix (~2,240 tokens) sits below Haiku's 4,096-token cache floor, so it would
+  not engage. Open question: does Haiku's synthesis stay vivid and grounded? If
+  not, the fallback is Haiku for the tool loop + Sonnet for the final synthesis.
 
 ## Next up (data — makes the output richer)
 
@@ -72,10 +82,11 @@ model's memory.
 
 ## Notes
 
-- Models: the synthesis runs on `claude-sonnet-4-6` (capable, fast, cheap for
-  the tool loop). No need for a larger model here.
-- Keys are read from environment variables (`LOGAINM_API_KEY`,
-  `ANTHROPIC_API_KEY`) and never hard-coded.
+- Models: the whole tool loop and the synthesis run on Haiku 4.5 — chosen for
+  cost and speed. If the synthesis prose ever feels thin, the fallback is to
+  keep Haiku for the tool loop and run the final synthesis on Sonnet.
+- Keys load from a git-ignored `.env` (or real environment variables —
+  `LOGAINM_API_KEY`, `ANTHROPIC_API_KEY`) and are never hard-coded.
 - Data sources: Logainm CC BY 4.0, National Monuments CC BY 4.0,
   NIAH CC BY 4.0, OpenStreetMap ODbL (townland boundaries),
   Wikipedia CC BY-SA, Dúchas CC BY 4.0 (pending API fix).
