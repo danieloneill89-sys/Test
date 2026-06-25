@@ -341,7 +341,9 @@
       font-family: var(--mono); font-size: 0.76rem; color: var(--muted);
       margin-top: 6px; letter-spacing: 0.02em;
     }
-    .bld-regno { font-size: 0.68rem; color: #5b564c; margin-left: 8px; }
+    .bld-regno { font-size: 0.68rem; color: #5b564c; margin-left: 8px;
+      text-decoration: none; }
+    a.bld-regno:hover { color: var(--accent); }
 
     /* ---- County picker (ambiguous) ---- */
     .ambiguous p { font-family: var(--mono); font-size: 0.85rem;
@@ -724,7 +726,14 @@
       html += '<div class="bld-cards">';
       buildings.forEach(b => {
         const bIcon = bldIcon(b.original_use);
-        const rCode = (b.rating || '').trim().toUpperCase();
+        // RATING is a full word ("National"/"Regional"/"Local"); the CSS badge
+        // classes are keyed on the first letter (N/R/L).
+        const rCode = (b.rating || '').trim().charAt(0).toUpperCase();
+        const regHtml = b.reg_no
+          ? (b.url
+              ? `<a class="bld-regno" href="${b.url}" target="_blank" rel="noopener">${b.reg_no} ↗</a>`
+              : `<span class="bld-regno">${b.reg_no}</span>`)
+          : '';
         html += `
           <div class="bld-card">
             <div class="bld-top">
@@ -733,14 +742,14 @@
                 <span class="bld-name">${b.name || b.original_use || 'Building'}</span>
               </div>
               <div class="bld-right">
-                ${rCode ? `<span class="bld-rating ${rCode}">${b.rating_label || rCode}</span>` : ''}
+                ${rCode ? `<span class="bld-rating ${rCode}">${b.rating_label || b.rating}</span>` : ''}
                 <span class="bld-dist">${b.distance_km} km</span>
               </div>
             </div>
             <div class="bld-meta">
               ${b.original_use ? b.original_use : ''}
               ${b.date_text ? ' · ' + b.date_text : ''}
-              ${b.reg_no ? `<span class="bld-regno">${b.reg_no}</span>` : ''}
+              ${regHtml}
             </div>
           </div>`;
       });
