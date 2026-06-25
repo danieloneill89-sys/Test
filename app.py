@@ -7,15 +7,25 @@ by agent.py and exposes them through a web page:
     browser  ->  Flask (/lookup)  ->  Logainm + monuments + Claude  ->  JSON
 
 Run it locally:
-    export LOGAINM_API_KEY="..."      # same keys as the CLI
-    export ANTHROPIC_API_KEY="..."
     pip install -r requirements.txt
     python3 app.py
-Then open http://localhost:5000 in your browser.
+Then open http://localhost:5001 in your browser.
 
-Your keys stay on your machine — the browser never sees them. It only ever
-talks to your own local server.
+API keys are read from a `.env` file in the project folder (LOGAINM_API_KEY
+and ANTHROPIC_API_KEY) — copy `.env.example` to `.env` and fill them in once.
+Already-set environment variables still take precedence, so `export VAR=...`
+also works. Your keys stay on your machine — the browser never sees them; it
+only ever talks to your own local server.
 """
+
+# Load keys from a local .env file before anything reads the environment.
+# Wrapped so the app still runs if python-dotenv isn't installed (you can
+# always fall back to `export LOGAINM_API_KEY=...` etc.).
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from flask import Flask, render_template, request, jsonify
 

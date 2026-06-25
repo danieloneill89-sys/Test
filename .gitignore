@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+
+# Local secrets — never commit. Real keys live in .env on each machine.
+.env
+
+# Local virtualenv
+.venv/

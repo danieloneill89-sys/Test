@@ -19,6 +19,14 @@ import json
 import re
 import argparse
 
+# Load keys from a local .env file (if present) before the Anthropic client or
+# the Logainm lookup read them. Optional — falls back to real env vars.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from anthropic import Anthropic
 
 from logainm_lookup import lookup_townland as _lookup_townland
