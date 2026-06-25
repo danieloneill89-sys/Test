@@ -60,7 +60,7 @@ is_in({lat},{lon})->.here;
   relation(pivot.here)["boundary"="administrative"]["admin_level"="10"];
   relation(pivot.here)["boundary"="townland"];
 );
-out tags geom;
+out geom;
 """
 
 
@@ -179,37 +179,44 @@ def find_boundary(latitude, longitude, county=None):
         return None
 
     # The query already narrows to townland level; if more than one comes back
-    # (rare overlaps) compute a bbox for each and keep the smallest.
+    # (rare overlaps) keep the smallest. Overpass hands us a `bounds` object per
+    # relation, so we take the bbox from there and don't depend on expanding the
+    # member geometry — that only adds the exact polygon when it's available.
+    def _bbox_of(el):
+        b = el.get("bounds") or {}
+        if all(k in b for k in ("minlon", "minlat", "maxlon", "maxlat")):
+            return (b["minlon"], b["minlat"], b["maxlon"], b["maxlat"])
+        # Fall back to deriving it from member geometry, if present.
+        pts = [(g["lon"], g["lat"])
+               for m in (el.get("members") or [])
+               for g in (m.get("geometry") or [])
+               if "lon" in g and "lat" in g]
+        return _ring_bbox(pts) if len(pts) >= 3 else None
+
     candidates = []
     for el in elements:
-        members = el.get("members") or []
-        pts = []
-        for m in members:
-            for g in (m.get("geometry") or []):
-                if "lon" in g and "lat" in g:
-                    pts.append((g["lon"], g["lat"]))
-        if len(pts) < 3:
-            continue
-        bbox = _ring_bbox(pts)
-        candidates.append((_bbox_area_deg2(bbox), el, bbox, members))
+        bbox = _bbox_of(el)
+        if bbox:
+            candidates.append((_bbox_area_deg2(bbox), el, bbox))
 
     if not candidates:
         return None
 
     candidates.sort(key=lambda c: c[0])
-    _, el, bbox, members = candidates[0]
+    _, el, bbox = candidates[0]
 
     tags = el.get("tags", {})
-    polygon = _stitch_outer_ring(members)
+    polygon = _stitch_outer_ring(el.get("members") or [])
     xmin, ymin, xmax, ymax = bbox
 
     return {
-        "name":     tags.get("name"),
-        "name_ga":  tags.get("name:ga"),
-        "osm_id":   el.get("id"),
-        "area_km2": _bbox_area_km2(bbox),
-        "bbox":     {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
-        "polygon":  polygon,
+        "name":        tags.get("name"),
+        "name_ga":     tags.get("name:ga"),
+        "osm_id":      el.get("id"),
+        "logainm_ref": tags.get("logainm:ref"),
+        "area_km2":    _bbox_area_km2(bbox),
+        "bbox":        {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
+        "polygon":     polygon,
     }
 
 
