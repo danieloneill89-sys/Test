@@ -423,6 +423,7 @@
   // ---- Cycling loading messages ----
   const PHASES = [
     '// reading the name',
+    '// tracing the boundary',
     '// searching the land',
     '// consulting the records',
     '// checking wikipedia',
@@ -586,16 +587,25 @@
       </div>`;
 
     // ---- Stats strip ----
+    // If we resolved a real townland boundary, the monument search was confined
+    // to the townland itself — show its area instead of a search radius.
+    const bnd = data.boundary;
+    const scopePill = (bnd && bnd.area_km2)
+      ? `<span class="stat-pill">
+           <span class="stat-label">townland</span>
+           <span class="stat-value">${bnd.area_km2} km²</span>
+         </span>`
+      : `<span class="stat-pill">
+           <span class="stat-label">radius</span>
+           <span class="stat-value">${radiusUsed} km</span>
+         </span>`;
     html += `
       <div class="stats-strip stagger">
         <span class="stat-pill">
           <span class="stat-label">monuments</span>
           <span class="stat-num" id="monCount">0</span>
         </span>
-        <span class="stat-pill">
-          <span class="stat-label">radius</span>
-          <span class="stat-value">${radiusUsed} km</span>
-        </span>
+        ${scopePill}
         ${coord ? `<span class="stat-pill">
           <span class="stat-label">coord</span>
           <span class="stat-value">${coord}</span>

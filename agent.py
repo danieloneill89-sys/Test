@@ -1,10 +1,15 @@
 """
-agent.py — geo-history agent (v2: three sources)
+agent.py — geo-history agent (v2: three sources + townland boundaries)
 
 Tools available to the model:
   lookup_townland  — Logainm: Irish name, etymology, historical forms, coordinate
-  find_monuments   — NMS SMR: archaeological sites near the coordinate
+  find_monuments   — NMS SMR: archaeological sites within the townland (or radius)
   search_wikipedia — Wikipedia: additional context for notable places/landmarks
+
+The monument search is sharpened by an OpenStreetMap townland boundary (looked
+up automatically), so it can ask "what is recorded inside this townland?"
+rather than "what is within 2 km of its centre?". Boundaries are best-effort:
+if OSM has no shape or is unreachable, the search falls back to point+radius.
 """
 
 import json
@@ -16,6 +21,7 @@ from anthropic import Anthropic
 from logainm_lookup import lookup_townland as _lookup_townland
 from monuments_lookup import find_monuments_near
 from wikipedia_lookup import search_wikipedia as _search_wikipedia
+from boundary_lookup import find_boundary
 
 SYNTHESIS_MODEL = "claude-sonnet-4-6"
 
@@ -48,11 +54,13 @@ TOOLS = [
         "name": "find_monuments",
         "description": (
             "Search the National Monuments Service Archaeological Survey of Ireland for recorded "
-            "monuments near a coordinate. Use the etymology from lookup_townland to guide the search: "
+            "monuments. Use the etymology from lookup_townland to guide the search: "
             "words like 'ráth', 'lios', 'dún' suggest ringforts or enclosures; 'cill', 'teampall' "
             "suggest ecclesiastical sites; 'tobar' suggests holy wells; 'caisleán' suggests a castle. "
-            "If nothing is found at the default radius, try a wider search before concluding there are "
-            "no recorded monuments."
+            "BY DEFAULT (omit radius_km) the search is constrained to the townland's actual boundary, "
+            "so you get exactly what is recorded inside this townland. If that finds little or nothing, "
+            "call again WITH a radius_km to widen the search into the surrounding area before "
+            "concluding there are no recorded monuments."
         ),
         "input_schema": {
             "type": "object",
@@ -68,10 +76,11 @@ TOOLS = [
                 "radius_km": {
                     "type": "number",
                     "description": (
-                        "Search radius in kilometres. Defaults to 2.0. "
-                        "Use smaller (0.5–1.0) for a tight local search; "
-                        "use larger (3.0–5.0) if the etymology suggests a significant feature "
-                        "that may sit just outside the townland boundary."
+                        "Optional. OMIT to search within the townland's own boundary (the preferred "
+                        "first call). Provide a value to instead search a circle of that radius from "
+                        "the centre — use this to widen the net (e.g. 3.0–5.0) when the townland "
+                        "itself has little recorded, or when the etymology points to a major feature "
+                        "that may sit just beyond the boundary."
                     )
                 },
                 "monument_type": {
@@ -123,7 +132,7 @@ Follow these steps:
    - Words like tobar → look for holy wells
    - Words like coill, doire → woodland context, search broadly for any monuments
    - Words like baile, achadh → settlement, search broadly
-3. Call find_monuments guided by what the etymology suggests. Adjust the radius and monument_type accordingly. If nothing is found, try a wider radius before concluding there are no recorded monuments.
+3. Call find_monuments guided by what the etymology suggests. Call it FIRST without a radius — this searches within the townland's actual boundary and tells you what is genuinely recorded inside this townland. Only if that returns little or nothing, call again with a radius_km (e.g. 3.0) to widen into the surrounding area. Use monument_type when the etymology strongly points to one kind of site.
 3b. Optionally call search_wikipedia if the etymology or monuments suggest the place has notable Wikipedia coverage — a famous castle, a well-known monastic site, a historically significant village. Skip it for unremarkable townlands.
 4. Write 2–3 short paragraphs synthesising ALL the evidence. Use ONLY facts from the tool results — do not invent dates, events, or details. Be vivid and specific: include named individuals, unusual architectural features, striking historical details. If historical_forms are present in the lookup result, weave in one or two to show how the name evolved across the centuries. Cite each monument's SMR number in parentheses. If Wikipedia was useful, you may mention it naturally but do not cite a URL — the synthesis should read as a continuous narrative.
 
@@ -158,10 +167,29 @@ def _execute_tool(name, inputs, collected):
         return {"status": "ok", "place": place}
 
     if name == "find_monuments":
+        place = collected.get("place") or {}
+        # Resolve the townland boundary once, then reuse it. We cache even a
+        # None result so a miss (or an Overpass outage) isn't retried per call.
+        if "boundary" not in collected:
+            try:
+                collected["boundary"] = find_boundary(
+                    inputs["latitude"],
+                    inputs["longitude"],
+                    county=place.get("county"),
+                )
+            except Exception:  # noqa: BLE001 - boundary is best-effort
+                collected["boundary"] = None
+        boundary = collected["boundary"]
+
+        # Default = search within the townland boundary. An explicit radius_km
+        # means the model is deliberately widening, so honour the circle and
+        # ignore the boundary for that call.
+        widening = inputs.get("radius_km") is not None
         monuments = find_monuments_near(
             inputs["latitude"],
             inputs["longitude"],
             radius_km=inputs.get("radius_km", 2.0),
+            boundary=None if widening else boundary,
         )
         # Apply optional type filter; fall back to unfiltered if it removes everything.
         monument_type = inputs.get("monument_type")
@@ -177,7 +205,14 @@ def _execute_tool(name, inputs, collected):
         seen = {m["smr_number"] for m in collected.get("monuments", [])}
         new_ones = [m for m in monuments if m["smr_number"] not in seen]
         collected.setdefault("monuments", []).extend(new_ones)
-        return {"count": len(monuments), "monuments": monuments}
+
+        if widening or not boundary:
+            scope = f"a {inputs.get('radius_km', 2.0)} km radius from the centre"
+        else:
+            area = boundary.get("area_km2")
+            scope = ("within the townland boundary"
+                     + (f" (~{area} km²)" if area else ""))
+        return {"count": len(monuments), "scope": scope, "monuments": monuments}
 
     if name == "search_wikipedia":
         result = _search_wikipedia(inputs["query"])
@@ -226,7 +261,8 @@ def run_agent(townland, county=None, default_radius_km=2.0):
         user_msg += f" in Co. {county}"
     user_msg += (
         f" and write a short historical note about it. "
-        f"Start with a {default_radius_km} km monument search radius."
+        f"Search the townland's own boundary first; if little is recorded there, "
+        f"widen to about {default_radius_km} km."
     )
 
     messages = [{"role": "user", "content": user_msg}]
@@ -250,6 +286,7 @@ def run_agent(townland, county=None, default_radius_km=2.0):
             return {
                 "status": "ok",
                 "place": collected.get("place"),
+                "boundary": collected.get("boundary"),
                 "monuments": collected.get("monuments", []),
                 "wikipedia": collected.get("wikipedia", []),
                 "synthesis": synthesis,
@@ -304,6 +341,10 @@ def main():
     p = result["place"]
     print(f"Found: {p['english_name']} ({p['irish_name']}), "
           f"{p['feature_type']} in Co. {p['county']}\n")
+    b = result.get("boundary")
+    if b:
+        shape = "exact boundary" if b.get("polygon") else "bounding box"
+        print(f"Townland boundary: {shape}, ~{b.get('area_km2')} km² (OSM {b.get('osm_id')}).")
     print(f"Found {len(result['monuments'])} monument(s).\n")
     print("-" * 70)
     print(result["synthesis"])

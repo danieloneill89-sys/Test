@@ -1,0 +1,210 @@
+"""
+boundary_lookup.py
+
+Support source for the geo-history agent: the real *shape* of a townland.
+
+Every other source works from a single centre coordinate plus a radius. But a
+townland is a small, irregular polygon (the Irish average is barely over a
+square kilometre), so a 2 km circle around the centre spills into three or four
+neighbouring townlands and calls their monuments "here". This module fetches
+the townland's actual boundary so the spatial searches can ask the precise
+question — "what is recorded *inside this townland*?" — instead of "what is
+within 2 km of a point?".
+
+Access method:
+  - OpenStreetMap, queried live through the Overpass API. Irish townlands were
+    imported into OSM by the townlands.ie project, so each is a boundary
+    relation with geometry. No API key. Data licensed ODbL.
+  - We query by COORDINATE, not by name: "which boundaries contain this point?"
+    That sidesteps the placename-disambiguation problem entirely — we already
+    have a trustworthy coordinate from Logainm.
+
+Robustness:
+  - Overpass can be slow or rate-limited, and not every townland is mapped.
+    Every failure path returns None so the caller falls back cleanly to the
+    existing point-and-radius search. Boundaries are an enhancement, never a
+    dependency.
+
+NOTE (verify on a networked machine): the exact OSM tag scheme for Irish
+townlands is assumed, not confirmed from this sandbox. To stay tag-agnostic we
+ask Overpass for *all* administrative boundaries containing the point (county,
+barony, civil parish, townland …) and keep the SMALLEST one — the townland is
+always the most fine-grained unit, whatever its tags happen to be.
+
+Install: pip install requests  (already required)
+"""
+
+import math
+import requests
+
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+# Overpass: find every area containing the point, narrow to boundary relations
+# that carry a name, and return their tags + full geometry. {lat}/{lon} are
+# filled in per request.
+_OVERPASS_QUERY = """
+[out:json][timeout:25];
+is_in({lat},{lon})->.here;
+relation(pivot.here)[boundary][name];
+out tags geom;
+"""
+
+
+def _ring_bbox(points):
+    """Bounding box of a list of (lon, lat) points → (xmin, ymin, xmax, ymax)."""
+    lons = [p[0] for p in points]
+    lats = [p[1] for p in points]
+    return min(lons), min(lats), max(lons), max(lats)
+
+
+def _bbox_area_deg2(bbox):
+    """Rough area of a bbox in square degrees — only used to rank candidates.
+
+    We just need a consistent "which is smallest" comparison between the nested
+    boundaries the point falls inside, so an exact area is unnecessary.
+    """
+    xmin, ymin, xmax, ymax = bbox
+    return (xmax - xmin) * (ymax - ymin)
+
+
+def _bbox_area_km2(bbox):
+    """Approximate bbox area in km², for human-readable reporting.
+
+    Uses the local-scale conversion: 1° latitude ≈ 111 km, 1° longitude ≈
+    111 km · cos(latitude). Good enough to say "about 1.4 km²".
+    """
+    xmin, ymin, xmax, ymax = bbox
+    mid_lat = math.radians((ymin + ymax) / 2)
+    width_km = (xmax - xmin) * 111.0 * math.cos(mid_lat)
+    height_km = (ymax - ymin) * 111.0
+    return round(abs(width_km * height_km), 2)
+
+
+def _stitch_outer_ring(members, tol=1e-7):
+    """Join a relation's 'outer' member ways into a single closed ring.
+
+    Overpass returns each member way as an ordered list of {lat, lon} points,
+    but the ways arrive in arbitrary order and direction. We chain them end to
+    end: start with the first way, then repeatedly attach whichever remaining
+    way begins (or, reversed, ends) where the current chain leaves off.
+
+    Returns a list of (lon, lat) points forming a closed ring, or None if the
+    pieces don't connect up (in which case the caller falls back to the bbox).
+    """
+    segments = []
+    for m in members:
+        if m.get("type") != "way":
+            continue
+        if m.get("role") not in ("outer", ""):
+            continue
+        geom = m.get("geometry") or []
+        pts = [(g["lon"], g["lat"]) for g in geom if "lon" in g and "lat" in g]
+        if len(pts) >= 2:
+            segments.append(pts)
+
+    if not segments:
+        return None
+
+    def close(a, b):
+        return abs(a[0] - b[0]) < tol and abs(a[1] - b[1]) < tol
+
+    ring = list(segments.pop(0))
+    # Keep attaching until nothing connects or the ring closes on itself.
+    while segments and not close(ring[0], ring[-1]):
+        tail = ring[-1]
+        for i, seg in enumerate(segments):
+            if close(seg[0], tail):
+                ring.extend(seg[1:])
+                segments.pop(i)
+                break
+            if close(seg[-1], tail):
+                ring.extend(reversed(seg[:-1]))
+                segments.pop(i)
+                break
+        else:
+            # Nothing matched the current tail: the ring can't be completed.
+            return None
+
+    if not close(ring[0], ring[-1]):
+        return None
+    if len(ring) < 4:
+        return None
+    return ring
+
+
+def find_boundary(latitude, longitude, county=None):
+    """Return the townland boundary that contains a coordinate.
+
+    Args:
+        latitude, longitude: a point inside the townland (from Logainm).
+        county: optional, reserved for future name-based disambiguation;
+                unused by the coordinate query but accepted so the call site
+                reads the same as the other lookups.
+
+    Returns a dict, or None if no boundary is found / the service is down:
+        {
+            "name", "name_ga",
+            "osm_id",
+            "area_km2",
+            "bbox":    {"xmin","ymin","xmax","ymax"},
+            "polygon": [[lon, lat], ...] | None,   # exact ring if we could
+                                                   # stitch it; else None
+        }
+
+    Never raises — any network, parsing, or geometry problem returns None so
+    the spatial searches fall back to the existing radius behaviour.
+    """
+    query = _OVERPASS_QUERY.format(lat=latitude, lon=longitude)
+    try:
+        response = requests.post(OVERPASS_URL, data={"data": query}, timeout=30)
+        response.raise_for_status()
+        elements = response.json().get("elements", [])
+    except (requests.RequestException, ValueError):
+        return None
+
+    # Each element is a boundary the point sits inside. Compute a bbox for each
+    # and keep the smallest — that's the townland, regardless of its tags.
+    candidates = []
+    for el in elements:
+        members = el.get("members") or []
+        pts = []
+        for m in members:
+            for g in (m.get("geometry") or []):
+                if "lon" in g and "lat" in g:
+                    pts.append((g["lon"], g["lat"]))
+        if len(pts) < 3:
+            continue
+        bbox = _ring_bbox(pts)
+        candidates.append((_bbox_area_deg2(bbox), el, bbox, members))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda c: c[0])
+    _, el, bbox, members = candidates[0]
+
+    tags = el.get("tags", {})
+    polygon = _stitch_outer_ring(members)
+    xmin, ymin, xmax, ymax = bbox
+
+    return {
+        "name":     tags.get("name"),
+        "name_ga":  tags.get("name:ga"),
+        "osm_id":   el.get("id"),
+        "area_km2": _bbox_area_km2(bbox),
+        "bbox":     {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
+        "polygon":  polygon,
+    }
+
+
+if __name__ == "__main__":
+    # Quick manual test — a point in Ballinakill, Co. Laois.
+    #   python3 boundary_lookup.py
+    b = find_boundary(52.8742, -7.3080)
+    if b:
+        shape = f"{len(b['polygon'])}-point polygon" if b["polygon"] else "bbox only"
+        print(f"{b['name']} ({b['name_ga'] or '—'}) "
+              f"— OSM {b['osm_id']}, ~{b['area_km2']} km², {shape}")
+        print(f"  bbox: {b['bbox']}")
+    else:
+        print("No boundary found (or Overpass unavailable).")

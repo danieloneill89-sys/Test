@@ -15,8 +15,14 @@ model's memory.
 - **Logainm lookup** (`logainm_lookup.py`) — Irish name, etymology, historical
   name forms (dated documentary attestations), county, coordinate, and a
   permalink back to the canonical Logainm page.
-- **Monuments lookup** (`monuments_lookup.py`) — archaeological sites near a
-  coordinate from the National Monuments Service (SMR), nearest-first.
+- **Monuments lookup** (`monuments_lookup.py`) — archaeological sites from the
+  National Monuments Service (SMR), nearest-first. Searches within the townland's
+  real boundary when one is known, otherwise a point+radius circle.
+- **Townland boundaries** (`boundary_lookup.py`) — the real *shape* of a
+  townland from OpenStreetMap (via Overpass), looked up by coordinate. Lets the
+  monument search ask "what is recorded inside this townland?" instead of
+  "within 2 km of its centre". Best-effort: falls back to point+radius if OSM
+  has no shape or is unreachable.
 - **Wikipedia lookup** (`wikipedia_lookup.py`) — optional secondary source for
   notable places; searched only when etymology or monuments suggest meaningful
   coverage. Fails gracefully if unavailable.
@@ -42,9 +48,6 @@ model's memory.
   v0.6 API currently returns HTTP 500 on all endpoints; emailed gaois@dcu.ie.
   This is the single biggest enrichment — it adds human stories (fairy forts,
   holy wells, local memory) that no other source provides.
-- **Townland boundaries** (townlands.ie / OpenStreetMap) — the real *shape* of
-  a townland instead of a single centre point, so the monument search matches
-  the actual area rather than a radius from the centre.
 
 ## Next up (features)
 
@@ -71,4 +74,5 @@ model's memory.
 - Keys are read from environment variables (`LOGAINM_API_KEY`,
   `ANTHROPIC_API_KEY`) and never hard-coded.
 - Data sources: Logainm CC BY 4.0, National Monuments CC BY 4.0,
-  Wikipedia CC BY-SA, Dúchas CC BY 4.0 (pending API fix).
+  OpenStreetMap ODbL (townland boundaries), Wikipedia CC BY-SA,
+  Dúchas CC BY 4.0 (pending API fix).
