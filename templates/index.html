@@ -309,6 +309,42 @@
       border-left: 2px solid var(--faint); margin-top: 6px;
     }
 
+    /* NIAH building cards */
+    .bld-cards { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    .bld-card {
+      padding: 14px 18px; border: 1px solid rgba(236,230,218,0.07);
+      border-radius: 12px; background: rgba(20,20,23,0.6);
+      transition: border-color 0.18s, background 0.18s;
+    }
+    .bld-card:hover {
+      border-color: var(--accent-border); background: rgba(26,26,30,0.9);
+    }
+    .bld-top {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    }
+    .bld-left  { display: flex; align-items: center; gap: 10px; }
+    .bld-icon  {
+      font-family: var(--mono); font-size: 0.88rem; color: var(--accent-2);
+      width: 20px; text-align: center; flex-shrink: 0; opacity: 0.85;
+    }
+    .bld-name  { font-family: var(--serif); font-size: 1.05rem; font-weight: 600; color: var(--ink); }
+    .bld-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .bld-rating {
+      font-family: var(--mono); font-size: 0.65rem; letter-spacing: 0.12em;
+      padding: 3px 8px; border-radius: 6px; text-transform: uppercase;
+    }
+    .bld-rating.N { background: rgba(217,164,65,0.22); color: var(--accent); border: 1px solid var(--accent-border); }
+    .bld-rating.R { background: rgba(236,230,218,0.08); color: var(--ink); border: 1px solid var(--faint); }
+    .bld-rating.L { background: transparent; color: var(--muted); border: 1px solid rgba(236,230,218,0.1); }
+    .bld-dist  { font-family: var(--mono); font-size: 0.74rem; color: var(--accent); }
+    .bld-meta  {
+      font-family: var(--mono); font-size: 0.76rem; color: var(--muted);
+      margin-top: 6px; letter-spacing: 0.02em;
+    }
+    .bld-regno { font-size: 0.68rem; color: #5b564c; margin-left: 8px;
+      text-decoration: none; }
+    a.bld-regno:hover { color: var(--accent); }
+
     /* ---- County picker (ambiguous) ---- */
     .ambiguous p { font-family: var(--mono); font-size: 0.85rem;
       color: var(--ink); letter-spacing: 0.04em; margin: 0 0 18px; }
@@ -389,7 +425,8 @@
         <div class="col-label">Sources</div>
         <div class="col-body">
           <a href="https://www.logainm.ie" target="_blank" rel="noopener">Logainm.ie</a><br>
-          <a href="https://www.archaeology.ie" target="_blank" rel="noopener">Archaeological Survey</a>
+          <a href="https://www.archaeology.ie" target="_blank" rel="noopener">Archaeological Survey</a><br>
+          <a href="https://www.buildingsofireland.ie" target="_blank" rel="noopener">Buildings of Ireland</a>
         </div>
       </div>
       <div>
@@ -426,6 +463,7 @@
     '// tracing the boundary',
     '// searching the land',
     '// consulting the records',
+    '// checking built heritage',
     '// checking wikipedia',
     '// writing the history',
   ];
@@ -471,6 +509,25 @@
       };
     }
     return { curiosity: null, text: raw };
+  }
+
+  // ---- NIAH building use → glyph ----
+  const BLD_ICONS = {
+    mill: '⊕', windmill: '⊕',
+    church: '†', chapel: '†', cathedral: '†',
+    castle: '▲', tower: '▲',
+    house: '⬡', farmhouse: '⬡', dwelling: '⬡', cottage: '⬡',
+    forge: '◈', barn: '◈', stable: '◈',
+    bridge: '≋',
+    school: '⬡', office: '⬡',
+  };
+  function bldIcon(use) {
+    if (!use) return '◻';
+    const u = use.toLowerCase();
+    for (const [k, v] of Object.entries(BLD_ICONS)) {
+      if (u.includes(k)) return v;
+    }
+    return '◻';
   }
 
   // ---- Monument type → glyph ----
@@ -587,6 +644,7 @@
       </div>`;
 
     // ---- Stats strip ----
+    const nBld = (data.buildings || []).length;
     // If we resolved a real townland boundary, the monument search was confined
     // to the townland itself — show its area instead of a search radius.
     const bnd = data.boundary;
@@ -604,6 +662,10 @@
         <span class="stat-pill">
           <span class="stat-label">monuments</span>
           <span class="stat-num" id="monCount">0</span>
+        </span>
+        <span class="stat-pill">
+          <span class="stat-label">buildings</span>
+          <span class="stat-num" id="bldCount">0</span>
         </span>
         ${scopePill}
         ${coord ? `<span class="stat-pill">
@@ -626,8 +688,10 @@
 
     // ---- Evidence drawer ----
     const wiki = (data.wikipedia || []).filter(w => w.found);
+    const buildings = data.buildings || [];
     const hasHistForms = p.historical_forms && p.historical_forms.length;
     const summaryParts = [`${nMon} monument${nMon === 1 ? '' : 's'}`];
+    if (nBld)         summaryParts.push(`${nBld} building${nBld === 1 ? '' : 's'}`);
     if (hasHistForms) summaryParts.push(`${p.historical_forms.length} name form${p.historical_forms.length === 1 ? '' : 's'}`);
     if (wiki.length)  summaryParts.push('Wikipedia');
 
@@ -666,6 +730,42 @@
       });
     }
 
+    // NIAH building cards
+    if (buildings.length) {
+      html += '<div class="ev-section-label">// built heritage · niah c.1700–1960</div>';
+      html += '<div class="bld-cards">';
+      buildings.forEach(b => {
+        const bIcon = bldIcon(b.original_use);
+        // RATING is a full word ("National"/"Regional"/"Local"); the CSS badge
+        // classes are keyed on the first letter (N/R/L).
+        const rCode = (b.rating || '').trim().charAt(0).toUpperCase();
+        const regHtml = b.reg_no
+          ? (b.url
+              ? `<a class="bld-regno" href="${b.url}" target="_blank" rel="noopener">${b.reg_no} ↗</a>`
+              : `<span class="bld-regno">${b.reg_no}</span>`)
+          : '';
+        html += `
+          <div class="bld-card">
+            <div class="bld-top">
+              <div class="bld-left">
+                <span class="bld-icon">${bIcon}</span>
+                <span class="bld-name">${b.name || b.original_use || 'Building'}</span>
+              </div>
+              <div class="bld-right">
+                ${rCode ? `<span class="bld-rating ${rCode}">${b.rating_label || b.rating}</span>` : ''}
+                <span class="bld-dist">${b.distance_km} km</span>
+              </div>
+            </div>
+            <div class="bld-meta">
+              ${b.original_use ? b.original_use : ''}
+              ${b.date_text ? ' · ' + b.date_text : ''}
+              ${regHtml}
+            </div>
+          </div>`;
+      });
+      html += '</div>';
+    }
+
     // Monument cards
     html += '<div class="mon-cards">';
     if (nMon) {
@@ -695,10 +795,12 @@
 
     show(resultEl, html);
 
-    // Animate monument counter after DOM is in place
+    // Animate counters after DOM is in place
     requestAnimationFrame(() => {
-      const el = document.getElementById('monCount');
-      if (el) animateCount(el, nMon);
+      const mc = document.getElementById('monCount');
+      if (mc) animateCount(mc, nMon);
+      const bc = document.getElementById('bldCount');
+      if (bc) animateCount(bc, nBld);
     });
   }
 

@@ -1,15 +1,18 @@
 """
-agent.py — geo-history agent (v2: three sources + townland boundaries)
+agent.py — geo-history agent (v3: four sources + townland boundaries)
 
 Tools available to the model:
-  lookup_townland  — Logainm: Irish name, etymology, historical forms, coordinate
-  find_monuments   — NMS SMR: archaeological sites within the townland (or radius)
-  search_wikipedia — Wikipedia: additional context for notable places/landmarks
+  lookup_townland     — Logainm: Irish name, etymology, historical forms, coordinate
+  find_monuments      — NMS SMR: archaeological sites within the townland (or radius)
+  search_wikipedia    — Wikipedia: additional context for notable places/landmarks
+  find_built_heritage — NIAH: post-medieval buildings c.1700–1960 (nearby radius)
 
 The monument search is sharpened by an OpenStreetMap townland boundary (looked
 up automatically), so it can ask "what is recorded inside this townland?"
 rather than "what is within 2 km of its centre?". Boundaries are best-effort:
 if OSM has no shape or is unreachable, the search falls back to point+radius.
+The NIAH search deliberately stays on a nearby radius — for built heritage it
+is more useful to surface notable buildings just beyond the boundary too.
 """
 
 import json
@@ -22,6 +25,7 @@ from logainm_lookup import lookup_townland as _lookup_townland
 from monuments_lookup import find_monuments_near
 from wikipedia_lookup import search_wikipedia as _search_wikipedia
 from boundary_lookup import find_boundary
+from niah_lookup import find_buildings_near
 
 SYNTHESIS_MODEL = "claude-sonnet-4-6"
 
@@ -119,7 +123,40 @@ TOOLS = [
             },
             "required": ["query"]
         }
-    }
+    },
+    {
+        "name": "find_built_heritage",
+        "description": (
+            "Search the National Inventory of Architectural Heritage (NIAH) for recorded "
+            "buildings near a coordinate. The NIAH covers c.1700–1960 and catalogues "
+            "post-medieval structures: mills, big houses, farmhouses, churches, forges, "
+            "industrial buildings, and bridges. Call this AFTER find_monuments — it fills "
+            "the gap between pre-1700 archaeology (SMR) and the modern landscape. "
+            "Always call it; most townlands have at least one NIAH-rated building."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "latitude": {
+                    "type": "number",
+                    "description": "Latitude (WGS84), from the lookup_townland result."
+                },
+                "longitude": {
+                    "type": "number",
+                    "description": "Longitude (WGS84), from the lookup_townland result."
+                },
+                "radius_km": {
+                    "type": "number",
+                    "description": (
+                        "Search radius in kilometres. Defaults to 2.0. "
+                        "Use 3.0–5.0 for rural areas where estate buildings "
+                        "may sit at a distance from the townland centre."
+                    )
+                }
+            },
+            "required": ["latitude", "longitude"]
+        }
+    },
 ]
 
 SYSTEM_PROMPT = """You are a knowledgeable Irish local historian building a geo-history note about a townland.
@@ -134,7 +171,8 @@ Follow these steps:
    - Words like baile, achadh → settlement, search broadly
 3. Call find_monuments guided by what the etymology suggests. Call it FIRST without a radius — this searches within the townland's actual boundary and tells you what is genuinely recorded inside this townland. Only if that returns little or nothing, call again with a radius_km (e.g. 3.0) to widen into the surrounding area. Use monument_type when the etymology strongly points to one kind of site.
 3b. Optionally call search_wikipedia if the etymology or monuments suggest the place has notable Wikipedia coverage — a famous castle, a well-known monastic site, a historically significant village. Skip it for unremarkable townlands.
-4. Write 2–3 short paragraphs synthesising ALL the evidence. Use ONLY facts from the tool results — do not invent dates, events, or details. Be vivid and specific: include named individuals, unusual architectural features, striking historical details. If historical_forms are present in the lookup result, weave in one or two to show how the name evolved across the centuries. Cite each monument's SMR number in parentheses. If Wikipedia was useful, you may mention it naturally but do not cite a URL — the synthesis should read as a continuous narrative.
+3c. Call find_built_heritage to search the NIAH for post-medieval buildings (c.1700–1960). This bridges the gap between the pre-1700 archaeology of the SMR and the modern landscape. Always call it.
+4. Write 2–3 short paragraphs synthesising ALL the evidence. Use ONLY facts from the tool results — do not invent dates, events, or details. Be vivid and specific: include named individuals, unusual architectural features, striking historical details. If historical_forms are present in the lookup result, weave in one or two to show how the name evolved across the centuries. Cite each monument's SMR number in parentheses. If NIAH buildings are present, mention the most notable one (highest rating first) and its original use. If Wikipedia was useful, you may mention it naturally but do not cite a URL — the synthesis should read as a continuous narrative.
 
 OUTPUT FORMAT — follow exactly or the page will break:
 • Begin with the very first word of the historical note. No title. No "Here is the note:". No preamble of any kind.
@@ -220,6 +258,20 @@ def _execute_tool(name, inputs, collected):
             collected.setdefault("wikipedia", []).append(result)
         return result
 
+    if name == "find_built_heritage":
+        try:
+            buildings = find_buildings_near(
+                inputs["latitude"],
+                inputs["longitude"],
+                radius_km=inputs.get("radius_km", 2.0),
+            )
+        except RuntimeError as exc:
+            return {"error": str(exc), "count": 0, "buildings": []}
+        seen = {b["reg_no"] for b in collected.get("buildings", [])}
+        new_ones = [b for b in buildings if b["reg_no"] not in seen]
+        collected.setdefault("buildings", []).extend(new_ones)
+        return {"count": len(buildings), "buildings": buildings}
+
     return {"error": f"Unknown tool: {name}"}
 
 
@@ -289,6 +341,7 @@ def run_agent(townland, county=None, default_radius_km=2.0):
                 "boundary": collected.get("boundary"),
                 "monuments": collected.get("monuments", []),
                 "wikipedia": collected.get("wikipedia", []),
+                "buildings": collected.get("buildings", []),
                 "synthesis": synthesis,
             }
 
@@ -345,7 +398,8 @@ def main():
     if b:
         shape = "exact boundary" if b.get("polygon") else "bounding box"
         print(f"Townland boundary: {shape}, ~{b.get('area_km2')} km² (OSM {b.get('osm_id')}).")
-    print(f"Found {len(result['monuments'])} monument(s).\n")
+    print(f"Found {len(result['monuments'])} monument(s), "
+          f"{len(result.get('buildings', []))} NIAH building(s).\n")
     print("-" * 70)
     print(result["synthesis"])
     print("-" * 70)
