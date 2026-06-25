@@ -229,7 +229,32 @@
     .synthesis em { color: var(--accent-2); font-style: italic; }
 
     /* ---- Evidence drawer ---- */
+    /* Townland shape — an amber "engraving" of the OSM boundary. Floats into
+       the right gutter beside the synthesis on wide screens; centres and stacks
+       above the prose on narrow ones. */
+    .townland-fig {
+      float: right; width: 190px; margin: 30px 0 16px 30px; text-align: center;
+    }
+    .townland-shape {
+      width: 100%; height: auto; display: block;
+      filter: drop-shadow(0 8px 22px rgba(0,0,0,0.5));
+    }
+    .townland-shape path {
+      fill: var(--accent-soft); stroke: var(--accent);
+      stroke-width: 1.1; stroke-linejoin: round; paint-order: stroke fill;
+    }
+    .townland-shape .ts-centre { fill: var(--accent-2); }
+    .townland-fig figcaption {
+      font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.14em;
+      text-transform: uppercase; color: var(--muted); margin-top: 12px; line-height: 1.8;
+    }
+    .townland-fig .ts-src { color: var(--accent); opacity: 0.85; }
+    @media (max-width: 760px) {
+      .townland-fig { float: none; width: 152px; margin: 24px auto 8px; }
+    }
+
     details.evidence {
+      clear: both;
       margin-top: 40px; border-top: 1px solid var(--faint); padding-top: 18px;
     }
     details.evidence summary {
@@ -550,6 +575,52 @@
     return '·';
   }
 
+  // ---- Townland shape ----
+  // Draws the OSM boundary ring as a small SVG "engraving". Longitude is scaled
+  // by cos(lat) so the shape isn't stretched sideways (a degree of longitude is
+  // shorter than a degree of latitude away from the equator). Returns '' when we
+  // have no real polygon — we never invent a shape we don't have a record for.
+  function townlandFigure(boundary, place) {
+    if (!boundary || !Array.isArray(boundary.polygon) || boundary.polygon.length < 3) return '';
+    const ring = boundary.polygon;                       // [[lon, lat], ...]
+    const lat0 = ring.reduce((s, pt) => s + pt[1], 0) / ring.length;
+    const k = Math.cos(lat0 * Math.PI / 180) || 1;       // longitude squeeze
+    const proj = ([lon, lat]) => [lon * k, lat];
+    const pts = ring.map(proj);
+    const xs = pts.map(pt => pt[0]), ys = pts.map(pt => pt[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const w = (maxX - minX) || 1e-9, h = (maxY - minY) || 1e-9;
+    const SIZE = 100, PAD = 9;
+    const scale = (SIZE - 2 * PAD) / Math.max(w, h);
+    const offX = PAD + ((SIZE - 2 * PAD) - w * scale) / 2;
+    const offY = PAD + ((SIZE - 2 * PAD) - h * scale) / 2;
+    const sx = x => offX + (x - minX) * scale;
+    const sy = y => offY + (maxY - y) * scale;            // flip: north is up
+    const d = pts.map(([x, y], i) =>
+      (i ? 'L' : 'M') + sx(x).toFixed(2) + ' ' + sy(y).toFixed(2)).join(' ') + ' Z';
+
+    // The recorded Logainm coordinate, marked as the townland's centre — but
+    // only if it genuinely falls inside the shape's extent.
+    let centre = '';
+    if (place && typeof place.latitude === 'number' && typeof place.longitude === 'number') {
+      const [cx, cy] = proj([place.longitude, place.latitude]);
+      if (cx >= minX && cx <= maxX && cy >= minY && cy <= maxY) {
+        centre = `<circle class="ts-centre" cx="${sx(cx).toFixed(2)}" cy="${sy(cy).toFixed(2)}" r="1.8"/>`;
+      }
+    }
+
+    const area = boundary.area_km2 ? ` · ${boundary.area_km2} km²` : '';
+    return `
+      <figure class="townland-fig stagger">
+        <svg class="townland-shape" viewBox="0 0 ${SIZE} ${SIZE}" role="img"
+             aria-label="Outline of the townland boundary">
+          <path d="${d}"/>${centre}
+        </svg>
+        <figcaption>townland outline${area}<br><span class="ts-src">OpenStreetMap</span></figcaption>
+      </figure>`;
+  }
+
   // ---- Count-up animation ----
   function animateCount(el, target, ms) {
     ms = ms || 700;
@@ -682,6 +753,9 @@
           <div class="curio-text">${curiosity}</div>
         </div>`;
     }
+
+    // ---- Townland shape (sits in the right gutter beside the synthesis) ----
+    html += townlandFigure(data.boundary, p);
 
     // ---- Synthesis ----
     html += `<div class="synthesis">${format(synthText)}</div>`;
