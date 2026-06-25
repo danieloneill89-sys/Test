@@ -123,9 +123,16 @@ def find_monuments_near(latitude, longitude, radius_km=2.0, max_results=15,
     }
     params.update(_spatial_params(latitude, longitude, radius_km, boundary))
 
-    response = requests.get(SMR_QUERY_URL, params=params, timeout=20)
+    # POST, not GET: a townland polygon can run to dozens of points, and the
+    # JSON geometry pushes a GET URL past the server's length limit (it answers
+    # 404). ArcGIS accepts the same parameters in a POST body, with no limit.
+    response = requests.post(SMR_QUERY_URL, data=params, timeout=20)
     response.raise_for_status()
-    features = response.json().get("features", [])
+    payload = response.json()
+    # ArcGIS reports query errors in a 200 body rather than an HTTP status.
+    if "error" in payload:
+        raise RuntimeError(f"SMR query error: {payload['error']}")
+    features = payload.get("features", [])
 
     monuments = []
     for feature in features:
