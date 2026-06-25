@@ -20,17 +20,23 @@ model's memory.
 - **Wikipedia lookup** (`wikipedia_lookup.py`) — optional secondary source for
   notable places; searched only when etymology or monuments suggest meaningful
   coverage. Fails gracefully if unavailable.
-- **Agentic pipeline** (`agent.py`) — Claude drives three tools via tool use:
+- **Agentic pipeline** (`agent.py`) — Claude drives four tools via tool use:
   it reads the etymology, decides what monument types to search for and at what
-  radius, and optionally searches Wikipedia for additional context. Ends with a
-  vivid narrative synthesis that weaves all sources together. Includes a
-  `CURIOSITY:` line — one striking fact from the records.
+  radius, optionally searches Wikipedia for additional context, and always queries
+  the NIAH for post-medieval buildings. Ends with a vivid narrative synthesis
+  that weaves all sources together. Includes a `CURIOSITY:` line — one striking
+  fact from the records.
 - **Web UI** (`app.py` + `templates/index.html`) — dark archival theme (near-
   black, amber accents, Fraunces serif + JetBrains Mono). Features: staggered
-  rise animations, cycling loading messages, animated monument counter, curiosity
-  callout box, stats strip, monument cards with type glyphs (◎ † ≈ ▲ ⊕), and
-  an evidence drawer showing etymology pills, historical name forms, Wikipedia
-  excerpt, and full monument list.
+  rise animations, cycling loading messages, animated monument + building
+  counters, curiosity callout box, stats strip, monument cards with type glyphs
+  (◎ † ≈ ▲ ⊕), NIAH building cards with rating badges (National / Regional /
+  Local), and an evidence drawer showing etymology pills, historical name forms,
+  Wikipedia excerpt, NIAH buildings, and full monument list.
+- **NIAH built heritage** (`niah_lookup.py`) — National Inventory of
+  Architectural Heritage. Bridges the post-medieval gap (c.1700–1960) between
+  the archaeological SMR and the modern landscape. Buildings rated N/R/L
+  (National / Regional / Local interest).
 - **Source citations** — Logainm permalink + SMR numbers + Wikipedia URL so
   every claim can be traced back to a record.
 - **Sticky county bug fixed** — form fields have no hardcoded defaults.
@@ -49,11 +55,8 @@ model's memory.
 ## Next up (features)
 
 - **Clickable map** — interactive Leaflet + OpenStreetMap map (no API key
-  needed). Click a place instead of typing; monuments shown as pins. Best built
-  *after* boundaries and folklore land, so the map has rich data to show.
-- **NIAH built heritage** (buildingsofireland.ie) — bridges the gap between
-  ancient archaeology (SMR, pre-1700) and the modern landscape. Catalogues
-  1700–1900 buildings: mills, big houses, churches, bridges, forges.
+  needed). Click a place instead of typing; monuments and buildings shown as pins.
+  Best built *after* boundaries and folklore land, so the map has rich data to show.
 
 ## Maybe later
 
@@ -71,4 +74,4 @@ model's memory.
 - Keys are read from environment variables (`LOGAINM_API_KEY`,
   `ANTHROPIC_API_KEY`) and never hard-coded.
 - Data sources: Logainm CC BY 4.0, National Monuments CC BY 4.0,
-  Wikipedia CC BY-SA, Dúchas CC BY 4.0 (pending API fix).
+  NIAH CC BY 4.0, Wikipedia CC BY-SA, Dúchas CC BY 4.0 (pending API fix).
