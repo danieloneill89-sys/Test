@@ -27,7 +27,68 @@ from wikipedia_lookup import search_wikipedia as _search_wikipedia
 from boundary_lookup import find_boundary
 from niah_lookup import find_buildings_near
 
-SYNTHESIS_MODEL = "claude-sonnet-4-6"
+# Haiku drives the whole tool loop and the synthesis. It is ~3x cheaper than
+# Sonnet ($1/$5 vs $3/$15 per 1M tokens) and faster, which matters because the
+# API is stateless: every turn resends the full conversation, so a lean run is
+# mostly about keeping the resent payload small (see the _lean_* trimmers below).
+MODEL = "claude-haiku-4-5"
+
+# How much of each tool result we feed back to the model. The UI still gets the
+# full records (they live in `collected`); these caps only bound what is resent
+# to the model on every subsequent turn, which is the main cost driver.
+_MAX_MONUMENTS_TO_MODEL = 8
+_MAX_BUILDINGS_TO_MODEL = 6
+_MAX_HISTORICAL_FORMS_TO_MODEL = 8
+_MAX_DESCRIPTION_CHARS = 240
+
+
+def _clip(text, limit=_MAX_DESCRIPTION_CHARS):
+    """Truncate a long free-text field at a word boundary for the model payload."""
+    if not text or len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0]
+    return cut + "…"
+
+
+def _lean_place(place):
+    """Model-facing view of a Logainm record: just what steers the search and
+    the synthesis. Drops UI-only fields (ids, permalink) and caps the dated
+    historical forms, since the model only weaves in one or two."""
+    return {
+        "english_name":  place.get("english_name"),
+        "irish_name":    place.get("irish_name"),
+        "irish_genitive": place.get("irish_genitive"),
+        "county":        place.get("county"),
+        "feature_type":  place.get("feature_type"),
+        "latitude":      place.get("latitude"),
+        "longitude":     place.get("longitude"),
+        "etymology":     place.get("etymology"),
+        "historical_forms": (place.get("historical_forms") or [])[:_MAX_HISTORICAL_FORMS_TO_MODEL],
+    }
+
+
+def _lean_monument(m):
+    """Model-facing view of one monument: class, SMR number (for citation),
+    distance, and a clipped description. Drops townland/county (redundant)."""
+    return {
+        "monument_class": m.get("monument_class"),
+        "smr_number":     m.get("smr_number"),
+        "distance_km":    m.get("distance_km"),
+        "description":    _clip(m.get("description")),
+    }
+
+
+def _lean_building(b):
+    """Model-facing view of one NIAH building: what the synthesis can use.
+    Drops UI-only fields (reg_no, url, image_url, current_use)."""
+    return {
+        "name":         b.get("name"),
+        "original_use": b.get("original_use"),
+        "date_text":    b.get("date_text"),
+        "rating":       b.get("rating"),
+        "distance_km":  b.get("distance_km"),
+        "description":  _clip(b.get("description")),
+    }
 
 TOOLS = [
     {
@@ -202,7 +263,7 @@ def _execute_tool(name, inputs, collected):
         townlands = [m for m in results if m["feature_type"] == "townland"]
         place = townlands[0] if townlands else results[0]
         collected["place"] = place
-        return {"status": "ok", "place": place}
+        return {"status": "ok", "place": _lean_place(place)}
 
     if name == "find_monuments":
         place = collected.get("place") or {}
@@ -250,7 +311,10 @@ def _execute_tool(name, inputs, collected):
             area = boundary.get("area_km2")
             scope = ("within the townland boundary"
                      + (f" (~{area} km²)" if area else ""))
-        return {"count": len(monuments), "scope": scope, "monuments": monuments}
+        # Feed back only the nearest few, trimmed — the synthesis cites a handful
+        # of SMR numbers, not all fifteen, and this payload is resent every turn.
+        lean = [_lean_monument(m) for m in monuments[:_MAX_MONUMENTS_TO_MODEL]]
+        return {"count": len(monuments), "scope": scope, "monuments": lean}
 
     if name == "search_wikipedia":
         result = _search_wikipedia(inputs["query"])
@@ -270,7 +334,8 @@ def _execute_tool(name, inputs, collected):
         seen = {b["reg_no"] for b in collected.get("buildings", [])}
         new_ones = [b for b in buildings if b["reg_no"] not in seen]
         collected.setdefault("buildings", []).extend(new_ones)
-        return {"count": len(buildings), "buildings": buildings}
+        lean = [_lean_building(b) for b in buildings[:_MAX_BUILDINGS_TO_MODEL]]
+        return {"count": len(buildings), "buildings": lean}
 
     return {"error": f"Unknown tool: {name}"}
 
@@ -321,7 +386,7 @@ def run_agent(townland, county=None, default_radius_km=2.0):
 
     for _ in range(10):  # safety cap — a well-formed run needs 3–4 turns at most
         response = client.messages.create(
-            model=SYNTHESIS_MODEL,
+            model=MODEL,
             max_tokens=2000,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
