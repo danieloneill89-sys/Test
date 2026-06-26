@@ -61,7 +61,10 @@ model's memory.
 
 - **Dúchas folklore** (`duchas_lookup.py`) — the National Folklore Collection.
   Filters by Logainm ID, so it drops straight into our pipeline. Blocked: the
-  v0.6 API currently returns HTTP 500 on all endpoints; emailed gaois@dcu.ie.
+  v0.6 API currently returns HTTP 500 on all endpoints. Emailed gaois@dcu.ie;
+  replied June 2026 — the API is in development but delayed with no timeline,
+  and the enquiry was escalated to the Director of the National Folklore
+  Collection. Nothing actionable our end; keep the thread warm and wait.
   This is the single biggest enrichment — it adds human stories (fairy forts,
   holy wells, local memory) that no other source provides.
 
