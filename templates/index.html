@@ -239,7 +239,11 @@
       width: 100%; height: auto; display: block;
       filter: drop-shadow(0 8px 22px rgba(0,0,0,0.5));
     }
-    .townland-shape path {
+    .townland-shape .ts-neighbour {
+      fill: rgba(217,164,65,0.04); stroke: var(--accent);
+      stroke-width: 0.5; stroke-linejoin: round; opacity: 0.45;
+    }
+    .townland-shape .ts-main {
       fill: var(--accent-soft); stroke: var(--accent);
       stroke-width: 1.1; stroke-linejoin: round; paint-order: stroke fill;
     }
@@ -249,6 +253,11 @@
       text-transform: uppercase; color: var(--muted); margin-top: 12px; line-height: 1.8;
     }
     .townland-fig .ts-src { color: var(--accent); opacity: 0.85; }
+    .townland-fig .ts-neighbours {
+      color: var(--accent); opacity: 0.85; text-decoration: none;
+      border-bottom: 1px solid var(--accent-border);
+    }
+    .townland-fig .ts-neighbours:hover { opacity: 1; }
     @media (max-width: 760px) {
       .townland-fig { float: none; width: 152px; margin: 24px auto 8px; }
     }
@@ -456,7 +465,7 @@
       </div>
       <div>
         <div class="col-label">Synthesis</div>
-        <div class="col-body">Claude (Sonnet)<br>grounded in records</div>
+        <div class="col-body">Claude (Haiku)<br>grounded in records</div>
       </div>
       <div>
         <div class="col-label">Licence</div>
@@ -580,44 +589,71 @@
   // by cos(lat) so the shape isn't stretched sideways (a degree of longitude is
   // shorter than a degree of latitude away from the equator). Returns '' when we
   // have no real polygon — we never invent a shape we don't have a record for.
-  function townlandFigure(boundary, place) {
+  function townlandFigure(boundary, place, neighbours) {
     if (!boundary || !Array.isArray(boundary.polygon) || boundary.polygon.length < 3) return '';
+    neighbours = (neighbours || []).filter(n => Array.isArray(n.polygon) && n.polygon.length >= 3);
+
     const ring = boundary.polygon;                       // [[lon, lat], ...]
+
+    // Build a shared projection across main shape + all neighbours so they
+    // all sit in the same coordinate space before we fit to the viewBox.
+    const allRings = [ring, ...neighbours.map(n => n.polygon)];
     const lat0 = ring.reduce((s, pt) => s + pt[1], 0) / ring.length;
-    const k = Math.cos(lat0 * Math.PI / 180) || 1;       // longitude squeeze
+    const k = Math.cos(lat0 * Math.PI / 180) || 1;
     const proj = ([lon, lat]) => [lon * k, lat];
-    const pts = ring.map(proj);
-    const xs = pts.map(pt => pt[0]), ys = pts.map(pt => pt[1]);
+
+    const allPts = allRings.flatMap(r => r.map(proj));
+    const xs = allPts.map(pt => pt[0]), ys = allPts.map(pt => pt[1]);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     const w = (maxX - minX) || 1e-9, h = (maxY - minY) || 1e-9;
-    const SIZE = 100, PAD = 9;
+    const SIZE = 100, PAD = 6;
     const scale = (SIZE - 2 * PAD) / Math.max(w, h);
     const offX = PAD + ((SIZE - 2 * PAD) - w * scale) / 2;
     const offY = PAD + ((SIZE - 2 * PAD) - h * scale) / 2;
     const sx = x => offX + (x - minX) * scale;
     const sy = y => offY + (maxY - y) * scale;            // flip: north is up
-    const d = pts.map(([x, y], i) =>
+
+    const toPath = r => r.map(proj).map(([x, y], i) =>
       (i ? 'L' : 'M') + sx(x).toFixed(2) + ' ' + sy(y).toFixed(2)).join(' ') + ' Z';
 
-    // The recorded Logainm coordinate, marked as the townland's centre — but
-    // only if it genuinely falls inside the shape's extent.
+    // Neighbour shapes — muted, behind the main shape.
+    const neighbourPaths = neighbours.map(n =>
+      `<path class="ts-neighbour" d="${toPath(n.polygon)}"/>`).join('');
+
+    // Main townland shape.
+    const mainPath = `<path class="ts-main" d="${toPath(ring)}"/>`;
+
+    // Centre dot — only when it falls inside the main shape's projected extent.
+    const mainPts = ring.map(proj);
+    const mxs = mainPts.map(p => p[0]), mys = mainPts.map(p => p[1]);
+    const mMinX = Math.min(...mxs), mMaxX = Math.max(...mxs);
+    const mMinY = Math.min(...mys), mMaxY = Math.max(...mys);
     let centre = '';
     if (place && typeof place.latitude === 'number' && typeof place.longitude === 'number') {
       const [cx, cy] = proj([place.longitude, place.latitude]);
-      if (cx >= minX && cx <= maxX && cy >= minY && cy <= maxY) {
-        centre = `<circle class="ts-centre" cx="${sx(cx).toFixed(2)}" cy="${sy(cy).toFixed(2)}" r="1.8"/>`;
-      }
+      if (cx >= mMinX && cx <= mMaxX && cy >= mMinY && cy <= mMaxY)
+        centre = `<circle class="ts-centre" cx="${sx(cx).toFixed(2)}" cy="${sy(cy).toFixed(2)}" r="1.6"/>`;
     }
 
     const area = boundary.area_km2 ? ` · ${boundary.area_km2} km²` : '';
+    const nLabel = neighbours.length ? ` · ${neighbours.length} adjacent` : '';
+
+    // Townlands.ie link — lets the user explore the full mosaic of surrounding townlands.
+    let townlandsLink = '';
+    if (place && place.english_name && place.county) {
+      const slug = s => s.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      const url = `https://www.townlands.ie/page/townland/${slug(place.county)}/${slug(place.english_name)}/`;
+      townlandsLink = `<br><a class="ts-neighbours" href="${url}" target="_blank" rel="noopener">explore on townlands.ie ↗</a>`;
+    }
+
     return `
       <figure class="townland-fig stagger">
         <svg class="townland-shape" viewBox="0 0 ${SIZE} ${SIZE}" role="img"
-             aria-label="Outline of the townland boundary">
-          <path d="${d}"/>${centre}
+             aria-label="Outline of the townland and its neighbours">
+          ${neighbourPaths}${mainPath}${centre}
         </svg>
-        <figcaption>townland outline${area}<br><span class="ts-src">OpenStreetMap</span></figcaption>
+        <figcaption>townland outline${area}${nLabel}<br><span class="ts-src">OpenStreetMap</span>${townlandsLink}</figcaption>
       </figure>`;
   }
 
@@ -755,7 +791,7 @@
     }
 
     // ---- Townland shape (sits in the right gutter beside the synthesis) ----
-    html += townlandFigure(data.boundary, p);
+    html += townlandFigure(data.boundary, p, data.neighbours || []);
 
     // ---- Synthesis ----
     html += `<div class="synthesis">${format(synthText)}</div>`;

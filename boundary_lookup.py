@@ -220,6 +220,66 @@ def find_boundary(latitude, longitude, county=None):
     }
 
 
+# Find all townland relations that share at least one way-node with the given
+# OSM relation. Returns up to ~12 neighbours — enough to tile the immediate
+# surrounding without a huge payload. {osm_id} is filled in per request.
+_NEIGHBOURS_QUERY = """
+[out:json][timeout:30];
+rel({osm_id})->.target;
+way(r.target)->.boundary_ways;
+node(w.boundary_ways)->.boundary_nodes;
+(
+  relation(bn.boundary_nodes)["boundary"="administrative"]["admin_level"="10"];
+  relation(bn.boundary_nodes)["boundary"="townland"];
+)->.candidates;
+rel.candidates(if: id() != {osm_id});
+out geom;
+"""
+
+
+def find_neighbours(osm_id):
+    """Return a list of neighbouring townland boundaries sharing a border.
+
+    Each entry is the same shape as find_boundary's return dict:
+        {"name", "name_ga", "osm_id", "area_km2", "bbox", "polygon"}
+
+    Returns an empty list on any failure — neighbours are decorative and
+    the page must work fine without them.
+    """
+    if not osm_id:
+        return []
+    query = _NEIGHBOURS_QUERY.format(osm_id=osm_id)
+    try:
+        response = requests.post(
+            OVERPASS_URL, data={"data": query}, headers=_HEADERS, timeout=35
+        )
+        response.raise_for_status()
+        elements = response.json().get("elements", [])
+    except (requests.RequestException, ValueError):
+        return []
+
+    neighbours = []
+    for el in elements:
+        tags = el.get("tags", {})
+        # Derive bbox from bounds object (Overpass includes it with out geom).
+        b = el.get("bounds") or {}
+        if not all(k in b for k in ("minlon", "minlat", "maxlon", "maxlat")):
+            continue
+        bbox = (b["minlon"], b["minlat"], b["maxlon"], b["maxlat"])
+        polygon = _stitch_outer_ring(el.get("members") or [])
+        neighbours.append({
+            "name":        tags.get("name"),
+            "name_ga":     tags.get("name:ga"),
+            "osm_id":      el.get("id"),
+            "area_km2":    _bbox_area_km2(bbox),
+            "bbox":        {"xmin": bbox[0], "ymin": bbox[1],
+                            "xmax": bbox[2], "ymax": bbox[3]},
+            "polygon":     polygon,
+        })
+
+    return neighbours
+
+
 if __name__ == "__main__":
     # Quick manual test — a point in Ballinakill, Co. Laois.
     #   python3 boundary_lookup.py

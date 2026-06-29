@@ -32,7 +32,7 @@ from anthropic import Anthropic
 from logainm_lookup import lookup_townland as _lookup_townland
 from monuments_lookup import find_monuments_near
 from wikipedia_lookup import search_wikipedia as _search_wikipedia
-from boundary_lookup import find_boundary
+from boundary_lookup import find_boundary, find_neighbours
 from niah_lookup import find_buildings_near
 
 # Haiku drives the whole tool loop and the synthesis. It is ~3x cheaper than
@@ -298,6 +298,13 @@ def _execute_tool(name, inputs, collected):
                 )
             except Exception:  # noqa: BLE001 - boundary is best-effort
                 collected["boundary"] = None
+            # Fetch neighbouring townlands once we have the OSM relation ID.
+            # Best-effort — an empty list is fine; neighbours are decorative.
+            osm_id = (collected["boundary"] or {}).get("osm_id")
+            try:
+                collected["neighbours"] = find_neighbours(osm_id) if osm_id else []
+            except Exception:  # noqa: BLE001
+                collected["neighbours"] = []
         boundary = collected["boundary"]
 
         # Default = search within the townland boundary. An explicit radius_km
@@ -427,6 +434,7 @@ def run_agent(townland, county=None, default_radius_km=2.0):
                 "monuments": collected.get("monuments", []),
                 "wikipedia": collected.get("wikipedia", []),
                 "buildings": collected.get("buildings", []),
+                "neighbours": collected.get("neighbours", []),
                 "synthesis": synthesis,
             }
 
