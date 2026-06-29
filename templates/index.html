@@ -262,6 +262,28 @@
       .townland-fig { float: none; width: 152px; margin: 24px auto 8px; }
     }
 
+    /* Neighbouring townlands list */
+    .neighbour-section {
+      clear: both; margin-top: 28px; padding-top: 20px;
+      border-top: 1px solid var(--faint);
+    }
+    .neighbour-label {
+      font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.26em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+    }
+    .neighbour-pills {
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .neighbour-pill {
+      font-family: var(--mono); font-size: 0.78rem;
+      padding: 6px 14px; border: 1px solid var(--accent-border);
+      border-radius: 20px; background: var(--accent-soft);
+      color: var(--ink); cursor: pointer; transition: background 0.15s, color 0.15s;
+    }
+    .neighbour-pill:hover {
+      background: var(--accent-mid); color: var(--accent-2);
+    }
+
     details.evidence {
       clear: both;
       margin-top: 40px; border-top: 1px solid var(--faint); padding-top: 18px;
@@ -656,6 +678,14 @@
       </figure>`;
   }
 
+  // ---- Neighbour search ----
+  function searchNeighbour(name, county) {
+    document.getElementById('townland').value = name;
+    document.getElementById('county').value = county || '';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    lookup();
+  }
+
   // ---- Count-up animation ----
   function animateCount(el, target, ms) {
     ms = ms || 700;
@@ -794,6 +824,21 @@
 
     // ---- Synthesis ----
     html += `<div class="synthesis">${format(synthText)}</div>`;
+
+    // ---- Neighbouring townlands ----
+    const neighbours = (data.neighbours || []).filter(n => n.name);
+    if (neighbours.length) {
+      html += `<div class="neighbour-section">
+        <div class="neighbour-label">// neighbouring townlands</div>
+        <div class="neighbour-pills">`;
+      neighbours.forEach(n => {
+        const county = p.county || '';
+        html += `<button class="neighbour-pill"
+          onclick="searchNeighbour(${JSON.stringify(n.name)}, ${JSON.stringify(county)})"
+        >${n.name}${n.name_ga ? ' · ' + n.name_ga : ''}</button>`;
+      });
+      html += `</div></div>`;
+    }
 
     // ---- Evidence drawer ----
     const wiki = (data.wikipedia || []).filter(w => w.found);
