@@ -639,12 +639,11 @@
     const area = boundary.area_km2 ? ` · ${boundary.area_km2} km²` : '';
     const nLabel = neighbours.length ? ` · ${neighbours.length} adjacent` : '';
 
-    // Townlands.ie link — lets the user explore the full mosaic of surrounding townlands.
+    // Link to the OSM relation — reliable since we have the exact osm_id.
     let townlandsLink = '';
-    if (place && place.english_name && place.county) {
-      const slug = s => s.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-      const url = `https://www.townlands.ie/page/townland/${slug(place.county)}/${slug(place.english_name)}/`;
-      townlandsLink = `<br><a class="ts-neighbours" href="${url}" target="_blank" rel="noopener">explore on townlands.ie ↗</a>`;
+    if (boundary && boundary.osm_id) {
+      const url = `https://www.openstreetmap.org/relation/${boundary.osm_id}`;
+      townlandsLink = `<br><a class="ts-neighbours" href="${url}" target="_blank" rel="noopener">view on OpenStreetMap ↗</a>`;
     }
 
     return `

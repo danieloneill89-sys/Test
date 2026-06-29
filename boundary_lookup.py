@@ -220,35 +220,43 @@ def find_boundary(latitude, longitude, county=None):
     }
 
 
-# Find all townland relations that share at least one way-node with the given
-# OSM relation. Returns up to ~12 neighbours — enough to tile the immediate
-# surrounding without a huge payload. {osm_id} is filled in per request.
+# Fetch all townland relations within a bounding box. Much simpler and more
+# reliable than node-sharing: Overpass handles bbox queries efficiently, and
+# a townland bbox is small so the buffer naturally captures only neighbours.
+# {south}/{west}/{north}/{east} are filled in per request.
 _NEIGHBOURS_QUERY = """
 [out:json][timeout:30];
-rel({osm_id})->.target;
-way(r.target)->.boundary_ways;
-node(w.boundary_ways)->.boundary_nodes;
 (
-  relation(bn.boundary_nodes)["boundary"="administrative"]["admin_level"="10"];
-  relation(bn.boundary_nodes)["boundary"="townland"];
-)->.candidates;
-rel.candidates(if: id() != {osm_id});
+  relation["boundary"="administrative"]["admin_level"="10"]
+    ({south},{west},{north},{east});
+  relation["boundary"="townland"]
+    ({south},{west},{north},{east});
+);
 out geom;
 """
 
 
-def find_neighbours(osm_id):
-    """Return a list of neighbouring townland boundaries sharing a border.
+def find_neighbours(bbox, exclude_osm_id=None):
+    """Return townland boundaries within a buffered bounding box.
 
-    Each entry is the same shape as find_boundary's return dict:
+    Args:
+        bbox: dict with keys xmin/ymin/xmax/ymax (from find_boundary).
+        exclude_osm_id: the main townland's OSM id -- excluded from results.
+
+    Each entry matches find_boundary's shape:
         {"name", "name_ga", "osm_id", "area_km2", "bbox", "polygon"}
 
-    Returns an empty list on any failure — neighbours are decorative and
-    the page must work fine without them.
+    Returns an empty list on any failure -- neighbours are decorative.
     """
-    if not osm_id:
+    if not bbox:
         return []
-    query = _NEIGHBOURS_QUERY.format(osm_id=osm_id)
+    buf = 0.012
+    query = _NEIGHBOURS_QUERY.format(
+        south=bbox["ymin"] - buf,
+        west=bbox["xmin"]  - buf,
+        north=bbox["ymax"] + buf,
+        east=bbox["xmax"]  + buf,
+    )
     try:
         response = requests.post(
             OVERPASS_URL, data={"data": query}, headers=_HEADERS, timeout=35
@@ -260,21 +268,22 @@ def find_neighbours(osm_id):
 
     neighbours = []
     for el in elements:
+        if el.get("id") == exclude_osm_id:
+            continue
         tags = el.get("tags", {})
-        # Derive bbox from bounds object (Overpass includes it with out geom).
         b = el.get("bounds") or {}
         if not all(k in b for k in ("minlon", "minlat", "maxlon", "maxlat")):
             continue
-        bbox = (b["minlon"], b["minlat"], b["maxlon"], b["maxlat"])
+        el_bbox = (b["minlon"], b["minlat"], b["maxlon"], b["maxlat"])
         polygon = _stitch_outer_ring(el.get("members") or [])
         neighbours.append({
-            "name":        tags.get("name"),
-            "name_ga":     tags.get("name:ga"),
-            "osm_id":      el.get("id"),
-            "area_km2":    _bbox_area_km2(bbox),
-            "bbox":        {"xmin": bbox[0], "ymin": bbox[1],
-                            "xmax": bbox[2], "ymax": bbox[3]},
-            "polygon":     polygon,
+            "name":     tags.get("name"),
+            "name_ga":  tags.get("name:ga"),
+            "osm_id":   el.get("id"),
+            "area_km2": _bbox_area_km2(el_bbox),
+            "bbox":     {"xmin": el_bbox[0], "ymin": el_bbox[1],
+                         "xmax": el_bbox[2], "ymax": el_bbox[3]},
+            "polygon":  polygon,
         })
 
     return neighbours

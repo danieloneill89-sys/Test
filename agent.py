@@ -300,9 +300,11 @@ def _execute_tool(name, inputs, collected):
                 collected["boundary"] = None
             # Fetch neighbouring townlands once we have the OSM relation ID.
             # Best-effort — an empty list is fine; neighbours are decorative.
-            osm_id = (collected["boundary"] or {}).get("osm_id")
+            bnd = collected["boundary"] or {}
             try:
-                collected["neighbours"] = find_neighbours(osm_id) if osm_id else []
+                collected["neighbours"] = find_neighbours(
+                    bnd.get("bbox"), exclude_osm_id=bnd.get("osm_id")
+                ) if bnd.get("bbox") else []
             except Exception:  # noqa: BLE001
                 collected["neighbours"] = []
         boundary = collected["boundary"]
