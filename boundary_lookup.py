@@ -193,7 +193,9 @@ def find_boundary(latitude, longitude, county=None):
         )
         response.raise_for_status()
         elements = response.json().get("elements", [])
-    except (requests.RequestException, ValueError):
+        print(f"[boundary] Overpass returned {len(elements)} element(s)")
+    except (requests.RequestException, ValueError) as exc:
+        print(f"[boundary] Overpass failed: {exc}")
         return None
 
     # The query already narrows to townland level; if more than one comes back
@@ -269,7 +271,9 @@ def find_neighbours(bbox, exclude_osm_id=None):
         )
         response.raise_for_status()
         elements = response.json().get("elements", [])
-    except (requests.RequestException, ValueError):
+        print(f"[neighbours] Overpass returned {len(elements)} element(s)")
+    except (requests.RequestException, ValueError) as exc:
+        print(f"[neighbours] Overpass failed: {exc}")
         return []
 
     neighbours = []
