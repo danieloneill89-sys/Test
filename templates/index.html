@@ -759,6 +759,7 @@
       return;
     }
 
+    console.log('neighbours:', data.neighbours);
     const p     = data.place;
     const nMon  = data.monuments.length;
     const coord = p.latitude
@@ -832,16 +833,20 @@
     html += `<div class="synthesis">${format(synthText)}</div>`;
 
     // ---- Neighbouring townlands ----
-    const neighbours = (data.neighbours || []).filter(n => n.name);
+    // Accept name_ga as fallback — some OSM relations are tagged with the Irish
+    // name only. The display label prefers English; the search uses whichever
+    // name is present (Logainm handles both).
+    const neighbours = (data.neighbours || []).filter(n => n.name || n.name_ga);
     if (neighbours.length) {
       html += `<div class="neighbour-section">
         <div class="neighbour-label">// neighbouring townlands</div>
         <div class="neighbour-pills">`;
       neighbours.forEach(n => {
+        const label = n.name || n.name_ga;
         const county = p.county || '';
         html += `<button class="neighbour-pill"
-          onclick="searchNeighbour(${JSON.stringify(n.name)}, ${JSON.stringify(county)})"
-        >${n.name}${n.name_ga ? ' · ' + n.name_ga : ''}</button>`;
+          onclick="searchNeighbour(${JSON.stringify(label)}, ${JSON.stringify(county)})"
+        >${label}${n.name && n.name_ga ? ' · ' + n.name_ga : ''}</button>`;
       });
       html += `</div></div>`;
     }
