@@ -625,9 +625,13 @@
     const proj = ([lon, lat]) => [lon * k, lat];
 
     const allPts = allRings.flatMap(r => r.map(proj));
+    // Use reduce instead of spread-into-Math.min/max: spread hits a JS engine
+    // argument-count limit (~65k) when many neighbour polygons are present.
     const xs = allPts.map(pt => pt[0]), ys = allPts.map(pt => pt[1]);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const minX = xs.reduce((a, b) => a < b ? a : b,  Infinity);
+    const maxX = xs.reduce((a, b) => a > b ? a : b, -Infinity);
+    const minY = ys.reduce((a, b) => a < b ? a : b,  Infinity);
+    const maxY = ys.reduce((a, b) => a > b ? a : b, -Infinity);
     const w = (maxX - minX) || 1e-9, h = (maxY - minY) || 1e-9;
     const SIZE = 100, PAD = 6;
     const scale = (SIZE - 2 * PAD) / Math.max(w, h);
@@ -649,8 +653,10 @@
     // Centre dot — only when it falls inside the main shape's projected extent.
     const mainPts = ring.map(proj);
     const mxs = mainPts.map(p => p[0]), mys = mainPts.map(p => p[1]);
-    const mMinX = Math.min(...mxs), mMaxX = Math.max(...mxs);
-    const mMinY = Math.min(...mys), mMaxY = Math.max(...mys);
+    const mMinX = mxs.reduce((a, b) => a < b ? a : b,  Infinity);
+    const mMaxX = mxs.reduce((a, b) => a > b ? a : b, -Infinity);
+    const mMinY = mys.reduce((a, b) => a < b ? a : b,  Infinity);
+    const mMaxY = mys.reduce((a, b) => a > b ? a : b, -Infinity);
     let centre = '';
     if (place && typeof place.latitude === 'number' && typeof place.longitude === 'number') {
       const [cx, cy] = proj([place.longitude, place.latitude]);
@@ -820,7 +826,7 @@
     }
 
     // ---- Townland shape (sits in the right gutter beside the synthesis) ----
-    html += townlandFigure(data.boundary, p, data.neighbours || []);
+    try { html += townlandFigure(data.boundary, p, data.neighbours || []); } catch (e) { console.error('townlandFigure:', e); }
 
     // ---- Synthesis ----
     html += `<div class="synthesis">${format(synthText)}</div>`;
