@@ -228,12 +228,9 @@ def find_boundary(latitude, longitude, county=None):
     }
 
 
-# Fetch metadata for all townland relations within a bounding box.
-# Uses `out bb;` (bounding box + tags, no member geometry) rather than
-# `out geom;` — the geometry request for 15–20 relations reliably times out
-# on the public Overpass endpoint. We only need names and a rough bbox for
-# the neighbour pills; exact polygon outlines are not fetched here.
-_NEIGHBOURS_QUERY = """
+# Stage 1 — fast spatial query, returns tags + bounding box only.
+# Reliably completes in 1–3 s and never times out even for 20+ relations.
+_NEIGHBOURS_META_QUERY = """
 [out:json][timeout:25];
 (
   relation["boundary"="administrative"]["admin_level"="10"]
@@ -244,39 +241,50 @@ _NEIGHBOURS_QUERY = """
 out bb;
 """
 
+# Stage 2 — fetch full geometry by the OSM IDs found in stage 1.
+# Querying by ID skips the spatial filter, so Overpass can answer much faster
+# than repeating the bbox+geom query. Best-effort: if this times out the
+# pills still work (from stage 1); only the SVG neighbour outlines are lost.
+_NEIGHBOURS_GEOM_QUERY = """
+[out:json][timeout:30];
+(
+  relation(id:{ids});
+);
+out geom;
+"""
+
 
 def find_neighbours(bbox, exclude_osm_id=None):
     """Return townland boundaries within a buffered bounding box.
 
-    Args:
-        bbox: dict with keys xmin/ymin/xmax/ymax (from find_boundary).
-        exclude_osm_id: the main townland's OSM id -- excluded from results.
-
-    Each entry matches find_boundary's shape:
-        {"name", "name_ga", "osm_id", "area_km2", "bbox", "polygon"}
+    Two-stage:
+      1. out bb;  — fast bbox+tags query; always used for pills.
+      2. out geom; by ID — best-effort polygon data for the SVG mosaic.
+         Falls back gracefully if Overpass is slow: pills still appear.
 
     Returns an empty list on any failure -- neighbours are decorative.
     """
     if not bbox:
         return []
     buf = 0.012
-    query = _NEIGHBOURS_QUERY.format(
+    meta_query = _NEIGHBOURS_META_QUERY.format(
         south=bbox["ymin"] - buf,
         west=bbox["xmin"]  - buf,
         north=bbox["ymax"] + buf,
         east=bbox["xmax"]  + buf,
     )
     try:
-        response = requests.post(
-            OVERPASS_URL, data={"data": query}, headers=_HEADERS, timeout=35
+        resp = requests.post(
+            OVERPASS_URL, data={"data": meta_query}, headers=_HEADERS, timeout=30
         )
-        response.raise_for_status()
-        elements = response.json().get("elements", [])
-        print(f"[neighbours] Overpass returned {len(elements)} element(s)")
+        resp.raise_for_status()
+        elements = resp.json().get("elements", [])
+        print(f"[neighbours] metadata: {len(elements)} element(s)")
     except (requests.RequestException, ValueError) as exc:
-        print(f"[neighbours] Overpass failed: {exc}")
+        print(f"[neighbours] metadata failed: {exc}")
         return []
 
+    # Build neighbour list from bboxes; polygon filled in by stage 2.
     neighbours = []
     for el in elements:
         if el.get("id") == exclude_osm_id:
@@ -295,7 +303,30 @@ def find_neighbours(bbox, exclude_osm_id=None):
             "polygon":  None,
         })
 
-    print(f"[neighbours] kept {len(neighbours)} of {len(elements)}")
+    if not neighbours:
+        return neighbours
+
+    # Stage 2: fetch polygon geometry by ID — much faster than a bbox+geom query.
+    ids = ",".join(str(n["osm_id"]) for n in neighbours)
+    geom_query = _NEIGHBOURS_GEOM_QUERY.format(ids=ids)
+    try:
+        resp = requests.post(
+            OVERPASS_URL, data={"data": geom_query}, headers=_HEADERS, timeout=35
+        )
+        resp.raise_for_status()
+        geom_els = resp.json().get("elements", [])
+        print(f"[neighbours] geometry: {len(geom_els)} element(s)")
+        geom_by_id = {
+            el["id"]: _stitch_outer_ring(el.get("members") or [])
+            for el in geom_els
+        }
+        for n in neighbours:
+            n["polygon"] = geom_by_id.get(n["osm_id"])
+    except (requests.RequestException, ValueError) as exc:
+        print(f"[neighbours] geometry failed (pills still work): {exc}")
+
+    print(f"[neighbours] kept {len(neighbours)}, "
+          f"{sum(1 for n in neighbours if n['polygon'])} with polygon")
     return neighbours
 
 
