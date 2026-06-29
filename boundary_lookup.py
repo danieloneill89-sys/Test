@@ -94,6 +94,24 @@ def _bbox_area_km2(bbox):
     return round(abs(width_km * height_km), 2)
 
 
+def _bbox_of(el):
+    """Return (xmin, ymin, xmax, ymax) for an Overpass relation element.
+
+    Tries the `bounds` field first (present with `out bb;` / `out body;`),
+    then falls back to deriving the bbox from member geometry (needed when
+    the query uses `out geom;`, which returns geometry but no bounds object).
+    Returns None if there is too little data to compute a bbox.
+    """
+    b = el.get("bounds") or {}
+    if all(k in b for k in ("minlon", "minlat", "maxlon", "maxlat")):
+        return (b["minlon"], b["minlat"], b["maxlon"], b["maxlat"])
+    pts = [(g["lon"], g["lat"])
+           for m in (el.get("members") or [])
+           for g in (m.get("geometry") or [])
+           if "lon" in g and "lat" in g]
+    return _ring_bbox(pts) if len(pts) >= 3 else None
+
+
 def _stitch_outer_ring(members, tol=1e-7):
     """Join a relation's 'outer' member ways into a single closed ring.
 
@@ -179,20 +197,8 @@ def find_boundary(latitude, longitude, county=None):
         return None
 
     # The query already narrows to townland level; if more than one comes back
-    # (rare overlaps) keep the smallest. Overpass hands us a `bounds` object per
-    # relation, so we take the bbox from there and don't depend on expanding the
-    # member geometry — that only adds the exact polygon when it's available.
-    def _bbox_of(el):
-        b = el.get("bounds") or {}
-        if all(k in b for k in ("minlon", "minlat", "maxlon", "maxlat")):
-            return (b["minlon"], b["minlat"], b["maxlon"], b["maxlat"])
-        # Fall back to deriving it from member geometry, if present.
-        pts = [(g["lon"], g["lat"])
-               for m in (el.get("members") or [])
-               for g in (m.get("geometry") or [])
-               if "lon" in g and "lat" in g]
-        return _ring_bbox(pts) if len(pts) >= 3 else None
-
+    # (rare overlaps) keep the smallest. _bbox_of is defined at module level
+    # and used here and in find_neighbours.
     candidates = []
     for el in elements:
         bbox = _bbox_of(el)
