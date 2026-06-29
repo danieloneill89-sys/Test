@@ -271,10 +271,11 @@ def find_neighbours(bbox, exclude_osm_id=None):
         if el.get("id") == exclude_osm_id:
             continue
         tags = el.get("tags", {})
-        b = el.get("bounds") or {}
-        if not all(k in b for k in ("minlon", "minlat", "maxlon", "maxlat")):
+        # out geom; does not include a bounds field — derive it from member
+        # geometry the same way find_boundary does via _bbox_of.
+        el_bbox = _bbox_of(el)
+        if not el_bbox:
             continue
-        el_bbox = (b["minlon"], b["minlat"], b["maxlon"], b["maxlat"])
         polygon = _stitch_outer_ring(el.get("members") or [])
         neighbours.append({
             "name":     tags.get("name"),
