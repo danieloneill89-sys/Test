@@ -281,12 +281,14 @@ def find_neighbours(bbox, exclude_osm_id=None):
         if el.get("id") == exclude_osm_id:
             continue
         tags = el.get("tags", {})
-        # out geom; does not include a bounds field — derive it from member
-        # geometry the same way find_boundary does via _bbox_of.
+        members = el.get("members") or []
+        n_geom = sum(1 for m in members if m.get("geometry"))
         el_bbox = _bbox_of(el)
+        print(f"[neighbours] el {el.get('id')} name={tags.get('name')!r} "
+              f"members={len(members)} with_geom={n_geom} bbox={el_bbox}")
         if not el_bbox:
             continue
-        polygon = _stitch_outer_ring(el.get("members") or [])
+        polygon = _stitch_outer_ring(members)
         neighbours.append({
             "name":     tags.get("name"),
             "name_ga":  tags.get("name:ga"),
@@ -297,6 +299,7 @@ def find_neighbours(bbox, exclude_osm_id=None):
             "polygon":  polygon,
         })
 
+    print(f"[neighbours] kept {len(neighbours)} of {len(elements)}")
     return neighbours
 
 
