@@ -327,6 +327,8 @@ def find_neighbours(bbox, exclude_osm_id=None):
 
     print(f"[neighbours] kept {len(neighbours)}, "
           f"{sum(1 for n in neighbours if n['polygon'])} with polygon")
+    for n in neighbours[:5]:
+        print(f"  sample: name={n['name']!r} name_ga={n['name_ga']!r} osm_id={n['osm_id']}")
     return neighbours
 
 
