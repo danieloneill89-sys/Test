@@ -759,8 +759,6 @@
       return;
     }
 
-    console.log('boundary:', data.boundary ? `osm_id=${data.boundary.osm_id} bbox=${JSON.stringify(data.boundary.bbox)}` : 'null');
-    console.log('neighbours:', data.neighbours);
     const p     = data.place;
     const nMon  = data.monuments.length;
     const coord = p.latitude

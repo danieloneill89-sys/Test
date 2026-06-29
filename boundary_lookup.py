@@ -228,19 +228,20 @@ def find_boundary(latitude, longitude, county=None):
     }
 
 
-# Fetch all townland relations within a bounding box. Much simpler and more
-# reliable than node-sharing: Overpass handles bbox queries efficiently, and
-# a townland bbox is small so the buffer naturally captures only neighbours.
-# {south}/{west}/{north}/{east} are filled in per request.
+# Fetch metadata for all townland relations within a bounding box.
+# Uses `out bb;` (bounding box + tags, no member geometry) rather than
+# `out geom;` — the geometry request for 15–20 relations reliably times out
+# on the public Overpass endpoint. We only need names and a rough bbox for
+# the neighbour pills; exact polygon outlines are not fetched here.
 _NEIGHBOURS_QUERY = """
-[out:json][timeout:30];
+[out:json][timeout:25];
 (
   relation["boundary"="administrative"]["admin_level"="10"]
     ({south},{west},{north},{east});
   relation["boundary"="townland"]
     ({south},{west},{north},{east});
 );
-out geom;
+out bb;
 """
 
 
@@ -281,14 +282,9 @@ def find_neighbours(bbox, exclude_osm_id=None):
         if el.get("id") == exclude_osm_id:
             continue
         tags = el.get("tags", {})
-        members = el.get("members") or []
-        n_geom = sum(1 for m in members if m.get("geometry"))
         el_bbox = _bbox_of(el)
-        print(f"[neighbours] el {el.get('id')} name={tags.get('name')!r} "
-              f"members={len(members)} with_geom={n_geom} bbox={el_bbox}")
         if not el_bbox:
             continue
-        polygon = _stitch_outer_ring(members)
         neighbours.append({
             "name":     tags.get("name"),
             "name_ga":  tags.get("name:ga"),
@@ -296,7 +292,7 @@ def find_neighbours(bbox, exclude_osm_id=None):
             "area_km2": _bbox_area_km2(el_bbox),
             "bbox":     {"xmin": el_bbox[0], "ymin": el_bbox[1],
                          "xmax": el_bbox[2], "ymax": el_bbox[3]},
-            "polygon":  polygon,
+            "polygon":  None,
         })
 
     print(f"[neighbours] kept {len(neighbours)} of {len(elements)}")
