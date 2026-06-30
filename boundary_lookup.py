@@ -37,7 +37,27 @@ Install: pip install requests  (already required)
 import math
 import requests
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Primary and fallback Overpass endpoints. The public server at overpass-api.de
+# is sometimes slow or rate-limited; kumi.systems is a reliable mirror.
+_OVERPASS_SERVERS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+OVERPASS_URL = _OVERPASS_SERVERS[0]  # kept for any external callers
+
+
+def _overpass_post(query, timeout):
+    """POST to Overpass, falling back to the mirror on 5xx or timeout."""
+    last_exc = None
+    for url in _OVERPASS_SERVERS:
+        try:
+            r = requests.post(url, data={"data": query}, headers=_HEADERS, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except (requests.RequestException, ValueError) as exc:
+            print(f"[overpass] {url} failed: {exc}")
+            last_exc = exc
+    raise last_exc
 
 # Overpass (like Wikipedia) rejects requests without a descriptive User-Agent,
 # answering 406 Not Acceptable. Identify ourselves.
@@ -188,10 +208,7 @@ def find_boundary(latitude, longitude, county=None):
     """
     query = _OVERPASS_QUERY.format(lat=latitude, lon=longitude)
     try:
-        response = requests.post(
-            OVERPASS_URL, data={"data": query}, headers=_HEADERS, timeout=30
-        )
-        response.raise_for_status()
+        response = _overpass_post(query, timeout=30)
         elements = response.json().get("elements", [])
         print(f"[boundary] Overpass returned {len(elements)} element(s)")
     except (requests.RequestException, ValueError) as exc:
@@ -274,10 +291,7 @@ def find_neighbours(bbox, exclude_osm_id=None):
         east=bbox["xmax"]  + buf,
     )
     try:
-        resp = requests.post(
-            OVERPASS_URL, data={"data": meta_query}, headers=_HEADERS, timeout=30
-        )
-        resp.raise_for_status()
+        resp = _overpass_post(meta_query, timeout=30)
         elements = resp.json().get("elements", [])
         print(f"[neighbours] metadata: {len(elements)} element(s)")
     except (requests.RequestException, ValueError) as exc:
@@ -310,10 +324,7 @@ def find_neighbours(bbox, exclude_osm_id=None):
     ids = ",".join(str(n["osm_id"]) for n in neighbours)
     geom_query = _NEIGHBOURS_GEOM_QUERY.format(ids=ids)
     try:
-        resp = requests.post(
-            OVERPASS_URL, data={"data": geom_query}, headers=_HEADERS, timeout=35
-        )
-        resp.raise_for_status()
+        resp = _overpass_post(geom_query, timeout=35)
         geom_els = resp.json().get("elements", [])
         print(f"[neighbours] geometry: {len(geom_els)} element(s)")
         geom_by_id = {
