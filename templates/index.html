@@ -752,8 +752,10 @@
     }
     if (data.status === 'ambiguous') {
       let html = '<div class="ambiguous"><p>That name appears in several counties. Which one?</p>';
-      data.counties.forEach(c =>
-        html += `<button class="county-pick" onclick="lookup('${c}')">${c} ↗</button>`);
+      data.counties.forEach(c => {
+        const ec = (c || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+        html += `<button class="county-pick" data-county="${ec}">${c} ↗</button>`;
+      });
       html += '</div>';
       show(resultEl, html);
       return;
@@ -960,12 +962,6 @@
 
     show(resultEl, html);
 
-    // Wire up neighbour pills via event delegation (data attributes avoid HTML-quoting issues)
-    resultEl.addEventListener('click', e => {
-      const pill = e.target.closest('.neighbour-pill');
-      if (pill) searchNeighbour(pill.dataset.name, pill.dataset.county);
-    });
-
     // Animate counters after DOM is in place
     requestAnimationFrame(() => {
       const mc = document.getElementById('monCount');
@@ -989,6 +985,15 @@
     // Scroll result into view after a beat
     setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
   }
+
+  // Single delegated listener wired once at page load.
+  // Handles both neighbour pills (data-name/data-county) and county pickers (data-county).
+  document.getElementById('result').addEventListener('click', e => {
+    const pill = e.target.closest('.neighbour-pill');
+    if (pill) { searchNeighbour(pill.dataset.name, pill.dataset.county); return; }
+    const pick = e.target.closest('.county-pick');
+    if (pick) lookup(pick.dataset.county);
+  });
 </script>
 </body>
 </html>
