@@ -843,8 +843,9 @@
       neighbours.forEach(n => {
         const label = n.name || n.name_ga;
         const county = p.county || '';
+        const esc = s => (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
         html += `<button class="neighbour-pill"
-          onclick="searchNeighbour(${JSON.stringify(label)}, ${JSON.stringify(county)})"
+          data-name="${esc(label)}" data-county="${esc(county)}"
         >${label}${n.name && n.name_ga ? ' · ' + n.name_ga : ''}</button>`;
       });
       html += `</div></div>`;
@@ -958,6 +959,12 @@
     html += '</div></details>';
 
     show(resultEl, html);
+
+    // Wire up neighbour pills via event delegation (data attributes avoid HTML-quoting issues)
+    resultEl.addEventListener('click', e => {
+      const pill = e.target.closest('.neighbour-pill');
+      if (pill) searchNeighbour(pill.dataset.name, pill.dataset.county);
+    });
 
     // Animate counters after DOM is in place
     requestAnimationFrame(() => {
